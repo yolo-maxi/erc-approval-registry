@@ -259,7 +259,6 @@ contract PermissionRegistryTest is Test {
 
     function _signPermissionPermit(IPermissionRegistry.PermissionPermit memory permit, uint256 pk)
         internal
-        view
         returns (bytes memory)
     {
         bytes32 structHash = keccak256(
@@ -283,7 +282,6 @@ contract PermissionRegistryTest is Test {
 
     function _signExecutionPermit(IPermissionRegistry.ExecutionPermit memory permit, uint256 pk)
         internal
-        view
         returns (bytes memory)
     {
         bytes32 structHash = keccak256(

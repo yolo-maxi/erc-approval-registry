@@ -97,10 +97,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         if (permit.target == address(0)) revert InvalidTarget();
         if (callData.length < 4) revert InvalidSelector();
 
-        bytes4 callSelector;
-        assembly {
-            callSelector := shr(224, calldataload(callData.offset))
-        }
+        bytes4 callSelector = bytes4(callData);
 
         if (permit.selector != callSelector) revert InvalidSelector();
         if (permit.calldataHash != keccak256(callData)) revert InvalidCalldataHash();
