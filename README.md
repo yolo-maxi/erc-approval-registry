@@ -1,21 +1,71 @@
-# ERC Permissions site
+# ERC Permissions
 
-Static Next.js proposal/docs site for a registry-first generic permission system.
+A super simple reference repo for a registry-based delegated auth primitive.
 
-## Run
+## Core idea
 
-```bash
-pnpm dev
+An owner can authorize:
+
+- one operator
+- on one target
+- for one function selector
+
+So instead of broad custody or blanket approvals, a user can authorize a narrow action like:
+
+- `claim()` on an LP wrapper
+- `claimRewards()` on a staking wrapper
+- `rebalance()` on a treasury-like target
+
+without also authorizing more sensitive functions.
+
+## What is in here
+
+### Core
+- `src/PermissionRegistry.sol`
+- `src/interfaces/IPermissionRegistry.sol`
+- `src/base/PermissionedTarget.sol`
+
+### Examples
+- `src/examples/UniV3LPWrapper.sol`
+- `src/examples/StakingRewardsWrapper.sol`
+- `src/examples/SimpleTreasury.sol`
+
+### Mocks
+- `src/examples/MockUniV3PositionManager.sol`
+- `src/examples/MockStakingRewardsManager.sol`
+
+### Tests
+- `test/PermissionRegistry.t.sol`
+
+## Integration pattern
+
+```solidity
+modifier onlyAuthorized(address owner) {
+    if (msg.sender != owner) {
+        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+    }
+    _;
+}
 ```
 
-## Build
+## Example behaviors covered
+
+### LP wrapper
+- authorize `claim()`
+- do **not** authorize `transferManagedPosition()`
+
+### Staking wrapper
+- authorize `claimRewards()`
+- do **not** authorize `unstake()`
+
+### Treasury-like target
+- authorize `rebalance()`
+- do **not** authorize `transferTreasuryControl()`
+
+That is the whole point: each function has its own auth surface.
+
+## Run tests
 
 ```bash
-pnpm build
+~/.foundry/bin/forge test
 ```
-
-## Notes
-
-- This site presents the system as a draft standard / reference implementation, not a finalized ERC.
-- Content is written to stay adaptable if the contracts evolve.
-- The page currently pulls architectural cues from `src/interfaces/IPermissionRegistry.sol`.

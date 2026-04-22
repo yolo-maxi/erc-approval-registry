@@ -4,39 +4,37 @@ pragma solidity ^0.8.26;
 import {IPermissionRegistry} from "../interfaces/IPermissionRegistry.sol";
 
 /// @title PermissionedTarget
-/// @notice Minimal base helper for integrating contracts that want owner/operator permissions.
+/// @notice Minimal integration helper: owner can call directly, otherwise caller needs an explicit permission.
 abstract contract PermissionedTarget {
-    IPermissionRegistry public immutable permissionRegistry;
+    IPermissionRegistry public immutable registry;
 
-    constructor(address registry) {
-        permissionRegistry = IPermissionRegistry(registry);
+    constructor(address registry_) {
+        registry = IPermissionRegistry(registry_);
     }
 
-    modifier onlyOwnerOrAuthorized(address owner) {
-        _checkOwnerOrAuthorized(owner);
+    modifier onlyAuthorized(address owner) {
+        _requireAuthorized(owner);
         _;
     }
 
-    function _checkOwnerOrAuthorized(address owner) internal view {
-        if (msg.sender == owner) return;
-
-        address actor = _actor();
-        if (permissionRegistry.isAuthorizedCall(owner, actor, address(this), msg.sig)) return;
-
-        revert IPermissionRegistry.PermissionDenied(owner, actor, address(this), msg.sig);
+    /// @dev Backwards-compatible alias for older examples in the repo.
+    modifier onlyOwnerOrAuthorized(address owner) {
+        _requireAuthorized(owner);
+        _;
     }
 
+    function _requireAuthorized(address owner) internal view {
+        if (msg.sender == owner) return;
+        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+    }
+
+    /// @dev Kept only so older example files continue compiling.
     function _actor() internal view returns (address) {
-        if (msg.sender == address(permissionRegistry)) {
-            return permissionRegistry.activeExecutionOperator();
-        }
         return msg.sender;
     }
 
-    function _ownerFromExecution(address fallbackOwner) internal view returns (address) {
-        if (msg.sender == address(permissionRegistry)) {
-            return permissionRegistry.activeExecutionOwner();
-        }
+    /// @dev Kept only so older example files continue compiling.
+    function _ownerFromExecution(address fallbackOwner) internal pure returns (address) {
         return fallbackOwner;
     }
 }

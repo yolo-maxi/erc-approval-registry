@@ -1,9 +1,7 @@
 cache/
 cache_forge/
 out/
+forge-out/
 coverage/
 .env
 .DS_Store
-pnpm-lock.yaml
-node_modules/
-.next/
