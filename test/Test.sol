@@ -10,6 +10,8 @@ interface Vm {
     function stopPrank() external;
     function expectRevert(bytes calldata revertData) external;
     function expectRevert(bytes4 revertData) external;
+    function warp(uint256 newTimestamp) external;
+    function deal(address account, uint256 newBalance) external;
 }
 
 abstract contract Test {

@@ -4,7 +4,8 @@ pragma solidity ^0.8.26;
 import {IPermissionRegistry} from "../interfaces/IPermissionRegistry.sol";
 
 /// @title PermissionedTarget
-/// @notice Minimal integration helper: owner can call directly, otherwise caller needs an explicit permission.
+/// @notice Minimal integration helper. Owner can always call directly; anyone else needs an
+///         explicit permission in the registry for this contract and selector.
 abstract contract PermissionedTarget {
     IPermissionRegistry public immutable registry;
 
@@ -13,28 +14,9 @@ abstract contract PermissionedTarget {
     }
 
     modifier onlyAuthorized(address owner) {
-        _requireAuthorized(owner);
+        if (msg.sender != owner) {
+            registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+        }
         _;
-    }
-
-    /// @dev Backwards-compatible alias for older examples in the repo.
-    modifier onlyOwnerOrAuthorized(address owner) {
-        _requireAuthorized(owner);
-        _;
-    }
-
-    function _requireAuthorized(address owner) internal view {
-        if (msg.sender == owner) return;
-        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
-    }
-
-    /// @dev Kept only so older example files continue compiling.
-    function _actor() internal view returns (address) {
-        return msg.sender;
-    }
-
-    /// @dev Kept only so older example files continue compiling.
-    function _ownerFromExecution(address fallbackOwner) internal pure returns (address) {
-        return fallbackOwner;
     }
 }
