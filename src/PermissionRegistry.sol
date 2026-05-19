@@ -6,21 +6,22 @@ import {EIP712} from "./utils/EIP712.sol";
 import {ECDSA} from "./utils/ECDSA.sol";
 
 /// @title PermissionRegistry
-/// @notice Registry for permissions scoped to (owner, operator, target, selector).
+/// @notice Registry for permissions scoped to (owner, operator, target) with a compact auth blob.
 ///
-/// Storage encoding: uint48 expiry where
-///   0                = not granted / revoked
-///   type(uint48).max = permanent
-///   anything else    = expiry timestamp (Unix seconds)
+/// Storage encoding: bytes auth where
+///   length 0 = not granted / revoked
+///   bytes[0:4] = uint32 expiry (type(uint32).max = permanent)
+///   length 4 = full target approval
+///   length >4 = expiry followed by concatenated bytes4 selectors
 contract PermissionRegistry is IPermissionRegistry, EIP712 {
     uint48 internal constant PERMANENT = type(uint48).max;
+    uint32 internal constant STORED_PERMANENT = type(uint32).max;
 
     bytes32 public constant PERMISSION_PERMIT_TYPEHASH = keccak256(
         "PermissionPermit(address owner,address operator,address target,bytes4 selector,uint48 expiry,uint256 nonce,uint256 deadline)"
     );
 
-    mapping(address owner => mapping(address operator => mapping(address target => mapping(bytes4 selector => uint48))))
-        internal permissions;
+    mapping(address owner => mapping(address operator => mapping(address target => bytes))) internal permissions;
 
     mapping(address owner => uint256) public permissionNonce;
 
@@ -31,16 +32,38 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
     // -------------------------------------------------------------------------
 
     function grant(address operator, address target, bytes4 selector) external {
-        _set(msg.sender, operator, target, selector, PERMANENT);
+        _grantSelector(msg.sender, operator, target, selector, STORED_PERMANENT);
     }
 
     function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external {
-        if (expiry == 0 || expiry <= uint48(block.timestamp)) revert InvalidExpiry();
-        _set(msg.sender, operator, target, selector, expiry);
+        _grantSelector(msg.sender, operator, target, selector, _normalizeExpiry(expiry));
     }
 
     function revoke(address operator, address target, bytes4 selector) external {
-        _set(msg.sender, operator, target, selector, 0);
+        _revokeSelector(msg.sender, operator, target, selector);
+    }
+
+    /// @notice Grant full target approval. Empty selector list encoded as expiry-only auth blob.
+    function grantFull(address operator, address target) external {
+        _setFull(msg.sender, operator, target, STORED_PERMANENT);
+    }
+
+    /// @notice Grant time-bounded full target approval.
+    function grantFullWithExpiry(address operator, address target, uint48 expiry) external {
+        _setFull(msg.sender, operator, target, _normalizeExpiry(expiry));
+    }
+
+    /// @notice Revoke all approvals for operator on target.
+    function revokeAll(address operator, address target) external {
+        _validateBase(msg.sender, operator, target);
+        delete permissions[msg.sender][operator][target];
+        emit PermissionSet(msg.sender, operator, target, bytes4(0), false, 0);
+    }
+
+    /// @notice Set exactly the provided selector bundle for operator on target.
+    function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external {
+        uint32 storedExpiry = expiry == PERMANENT ? STORED_PERMANENT : _normalizeExpiry(expiry);
+        _setSelectorBundle(msg.sender, operator, target, selectors, storedExpiry);
     }
 
     function grantBatch(PermissionKey[] calldata keys) external {
@@ -48,7 +71,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         for (uint256 i; i < length; ++i) {
             PermissionKey calldata key = keys[i];
             if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _set(key.owner, key.operator, key.target, key.selector, PERMANENT);
+            _grantSelector(key.owner, key.operator, key.target, key.selector, STORED_PERMANENT);
         }
     }
 
@@ -58,8 +81,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             PermissionEntry calldata entry = entries[i];
             PermissionKey calldata key = entry.key;
             if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            if (entry.expiry == 0 || entry.expiry <= uint48(block.timestamp)) revert InvalidExpiry();
-            _set(key.owner, key.operator, key.target, key.selector, entry.expiry);
+            _grantSelector(key.owner, key.operator, key.target, key.selector, _normalizeExpiry(entry.expiry));
         }
     }
 
@@ -68,7 +90,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         for (uint256 i; i < length; ++i) {
             PermissionKey calldata key = keys[i];
             if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _set(key.owner, key.operator, key.target, key.selector, 0);
+            _revokeSelector(key.owner, key.operator, key.target, key.selector);
         }
     }
 
@@ -78,7 +100,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
 
     function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external {
         if (block.timestamp > permit.deadline) revert DeadlineExpired();
-        if (permit.expiry != 0 && permit.expiry <= uint48(block.timestamp)) revert InvalidExpiry();
+        if (permit.expiry != 0) _normalizeExpiryAllowPermanent(permit.expiry);
 
         uint256 nonce = permissionNonce[permit.owner];
         if (permit.nonce != nonce) revert InvalidNonce(nonce, permit.nonce);
@@ -99,7 +121,11 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         if (signer != permit.owner) revert InvalidSignature();
 
         permissionNonce[permit.owner] = nonce + 1;
-        _set(permit.owner, permit.operator, permit.target, permit.selector, permit.expiry);
+        if (permit.expiry == 0) {
+            _revokeSelector(permit.owner, permit.operator, permit.target, permit.selector);
+        } else {
+            _grantSelector(permit.owner, permit.operator, permit.target, permit.selector, _normalizeExpiryAllowPermanent(permit.expiry));
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -111,14 +137,15 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         view
         returns (bool)
     {
-        uint48 expiry = permissions[owner][operator][target][selector];
-        return expiry != 0 && block.timestamp <= expiry;
+        (bool authorized, uint32 expiry,) = _decodeStorageAuthorization(permissions[owner][operator][target], selector);
+        return authorized && block.timestamp <= expiry;
     }
 
     function requireAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view {
-        uint48 expiry = permissions[owner][operator][target][selector];
-        if (expiry == 0) revert PermissionDenied(owner, operator, target, selector);
-        if (block.timestamp > expiry) revert PermissionExpired(owner, operator, target, selector);
+        (bool authorized, uint32 expiry, bool selectorPresent) =
+            _decodeStorageAuthorization(permissions[owner][operator][target], selector);
+        if (!selectorPresent) revert PermissionDenied(owner, operator, target, selector);
+        if (!authorized || block.timestamp > expiry) revert PermissionExpired(owner, operator, target, selector);
     }
 
     function permissionExpiry(address owner, address operator, address target, bytes4 selector)
@@ -126,18 +153,236 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         view
         returns (uint48)
     {
-        return permissions[owner][operator][target][selector];
+        (bool selectorPresent, uint32 expiry,) = _decodeStorageAuthorization(permissions[owner][operator][target], selector);
+        if (!selectorPresent) return 0;
+        return _externalExpiry(expiry);
+    }
+
+    function rawPermissionData(address owner, address operator, address target) external view returns (bytes memory) {
+        return permissions[owner][operator][target];
     }
 
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
 
-    function _set(address owner, address operator, address target, bytes4 selector, uint48 expiry) internal {
-        if (owner == address(0) || operator == address(0) || target == address(0)) revert InvalidAddress();
-        if (selector == bytes4(0)) revert InvalidSelector();
+    function _setFull(address owner, address operator, address target, uint32 expiry) internal {
+        _validateBase(owner, operator, target);
+        permissions[owner][operator][target] = abi.encodePacked(expiry);
+        emit PermissionSet(owner, operator, target, bytes4(0), true, _externalExpiry(expiry));
+    }
 
-        permissions[owner][operator][target][selector] = expiry;
-        emit PermissionSet(owner, operator, target, selector, expiry != 0, expiry);
+    function _setSelectorBundle(
+        address owner,
+        address operator,
+        address target,
+        bytes4[] calldata selectors,
+        uint32 expiry
+    ) internal {
+        _validateBase(owner, operator, target);
+        uint256 length = selectors.length;
+        if (length == 0) {
+            _setFull(owner, operator, target, expiry);
+            return;
+        }
+
+        bytes memory auth = new bytes(4 + length * 4);
+        _writeExpiry(auth, expiry);
+        bytes4 previous;
+        for (uint256 i; i < length; ++i) {
+            bytes4 selector = selectors[i];
+            if (selector == bytes4(0) || selector <= previous) revert InvalidSelector();
+            _writeSelector(auth, i, selector);
+            previous = selector;
+            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+        }
+        permissions[owner][operator][target] = auth;
+    }
+
+    function _grantSelector(address owner, address operator, address target, bytes4 selector, uint32 expiry) internal {
+        _validate(owner, operator, target, selector);
+
+        bytes memory auth = permissions[owner][operator][target];
+        if (auth.length == 4) {
+            _writeExpiry(auth, expiry);
+            permissions[owner][operator][target] = auth;
+            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            return;
+        }
+
+        if (auth.length == 0) {
+            bytes memory fresh = new bytes(8);
+            _writeExpiry(fresh, expiry);
+            _writeSelector(fresh, 0, selector);
+            permissions[owner][operator][target] = fresh;
+            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            return;
+        }
+
+        uint256 selectorCount = (auth.length - 4) / 4;
+        uint256 insertAt = selectorCount;
+        bool found;
+        for (uint256 i; i < selectorCount; ++i) {
+            bytes4 current = _readSelector(auth, i);
+            if (current == selector) {
+                found = true;
+                break;
+            }
+            if (selector < current) {
+                insertAt = i;
+                break;
+            }
+        }
+
+        if (found) {
+            _writeExpiry(auth, expiry);
+            permissions[owner][operator][target] = auth;
+            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            return;
+        }
+
+        bytes memory updated = new bytes(auth.length + 4);
+        _writeExpiry(updated, expiry);
+        for (uint256 i; i < selectorCount + 1; ++i) {
+            bytes4 value;
+            if (i < insertAt) value = _readSelector(auth, i);
+            else if (i == insertAt) value = selector;
+            else value = _readSelector(auth, i - 1);
+            _writeSelector(updated, i, value);
+        }
+        permissions[owner][operator][target] = updated;
+        emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+    }
+
+    function _revokeSelector(address owner, address operator, address target, bytes4 selector) internal {
+        _validate(owner, operator, target, selector);
+        bytes memory auth = permissions[owner][operator][target];
+        if (auth.length == 0 || auth.length == 4) {
+            emit PermissionSet(owner, operator, target, selector, false, 0);
+            return;
+        }
+
+        uint256 selectorCount = (auth.length - 4) / 4;
+        uint256 removeAt = selectorCount;
+        for (uint256 i; i < selectorCount; ++i) {
+            if (_readSelector(auth, i) == selector) {
+                removeAt = i;
+                break;
+            }
+        }
+        if (removeAt == selectorCount) {
+            emit PermissionSet(owner, operator, target, selector, false, 0);
+            return;
+        }
+        if (selectorCount == 1) {
+            delete permissions[owner][operator][target];
+            emit PermissionSet(owner, operator, target, selector, false, 0);
+            return;
+        }
+
+        bytes memory updated = new bytes(auth.length - 4);
+        _writeExpiry(updated, _readExpiry(auth));
+        for (uint256 i; i < selectorCount - 1; ++i) {
+            bytes4 value = _readSelector(auth, i < removeAt ? i : i + 1);
+            _writeSelector(updated, i, value);
+        }
+        permissions[owner][operator][target] = updated;
+        emit PermissionSet(owner, operator, target, selector, false, 0);
+    }
+
+    function _decodeStorageAuthorization(bytes storage auth, bytes4 selector)
+        internal
+        view
+        returns (bool selectorPresent, uint32 expiry, bool presentEvenIfExpired)
+    {
+        uint256 length = auth.length;
+        if (length == 0) return (false, 0, false);
+        if (length < 4 || (length - 4) % 4 != 0) return (false, 0, false);
+
+        if (length <= 31) {
+            bytes32 word;
+            assembly {
+                word := sload(auth.slot)
+            }
+            expiry = uint32(bytes4(word));
+            if (expiry == 0) return (false, expiry, false);
+            if (length == 4) return (true, expiry, true);
+
+            uint256 selectorCount = (length - 4) / 4;
+            for (uint256 i; i < selectorCount; ++i) {
+                bytes4 current = bytes4(word << ((i + 1) * 32));
+                if (current == selector) return (true, expiry, true);
+                if (current > selector) break;
+            }
+            return (false, expiry, false);
+        }
+
+        bytes memory authMemory = auth;
+        expiry = _readExpiry(authMemory);
+        if (expiry == 0) return (false, expiry, false);
+
+        uint256 selectorCount = (length - 4) / 4;
+        for (uint256 i; i < selectorCount; ++i) {
+            bytes4 current = _readSelector(authMemory, i);
+            if (current == selector) return (true, expiry, true);
+            if (current > selector) break;
+        }
+        return (false, expiry, false);
+    }
+
+    function _validate(address owner, address operator, address target, bytes4 selector) internal pure {
+        _validateBase(owner, operator, target);
+        if (selector == bytes4(0)) revert InvalidSelector();
+    }
+
+    function _validateBase(address owner, address operator, address target) internal pure {
+        if (owner == address(0) || operator == address(0) || target == address(0)) revert InvalidAddress();
+    }
+
+    function _normalizeExpiry(uint48 expiry) internal view returns (uint32) {
+        if (expiry == 0 || expiry <= uint48(block.timestamp) || expiry > uint48(STORED_PERMANENT - 1)) {
+            revert InvalidExpiry();
+        }
+        return uint32(expiry);
+    }
+
+    function _normalizeExpiryAllowPermanent(uint48 expiry) internal view returns (uint32) {
+        if (expiry == PERMANENT) return STORED_PERMANENT;
+        return _normalizeExpiry(expiry);
+    }
+
+    function _externalExpiry(uint32 expiry) internal pure returns (uint48) {
+        return expiry == STORED_PERMANENT ? PERMANENT : uint48(expiry);
+    }
+
+    function _readExpiry(bytes memory auth) internal pure returns (uint32 expiry) {
+        assembly {
+            expiry := shr(224, mload(add(auth, 32)))
+        }
+    }
+
+    function _writeExpiry(bytes memory auth, uint32 expiry) internal pure {
+        assembly {
+            let word := mload(add(auth, 32))
+            word := or(shl(224, expiry), and(word, 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+            mstore(add(auth, 32), word)
+        }
+    }
+
+    function _readSelector(bytes memory auth, uint256 index) internal pure returns (bytes4 selector) {
+        uint256 offset = 36 + index * 4;
+        assembly {
+            selector := mload(add(auth, offset))
+        }
+    }
+
+    function _writeSelector(bytes memory auth, uint256 index, bytes4 selector) internal pure {
+        uint256 offset = 36 + index * 4;
+        assembly {
+            let ptr := add(auth, offset)
+            let word := mload(ptr)
+            word := or(selector, and(word, 0x00000000ffffffffffffffffffffffffffffffffffffffffffffffffffffffff))
+            mstore(ptr, word)
+        }
     }
 }
