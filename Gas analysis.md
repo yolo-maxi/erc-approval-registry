@@ -48,6 +48,7 @@ Where:
 - If only the 4-byte expiry is present, the operator is approved for all selectors on the target.
 - If selectors are present, the operator is approved only for those selectors.
 - Selectors should be sorted and unique to allow early exit during scans.
+- Expiry is bundle-wide for each `(owner, operator, target)` blob, not per selector.
 
 Hot-path check:
 
@@ -245,7 +246,7 @@ Weaknesses:
 - Selector-bundle checks are O(n).
 - Hot partial permissions become more expensive as bundle size grows.
 - The implementation is more subtle than a simple nested mapping.
-- Expiry is naturally bundle-wide, not per selector.
+- Expiry is bundle-wide, not per selector; different expiries for different selectors under the same `(owner, operator, target)` are intentionally not supported.
 - Uses `uint32` expiry internally, which is fine until February 2106 but shorter than the current `uint48` timestamp range.
 
 Best fit:

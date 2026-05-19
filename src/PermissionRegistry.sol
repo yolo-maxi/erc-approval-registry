@@ -36,7 +36,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
     }
 
     function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external {
-        _grantSelector(msg.sender, operator, target, selector, _normalizeExpiry(expiry));
+        _grantSelector(msg.sender, operator, target, selector, _normalizeExpiryAllowPermanent(expiry));
     }
 
     function revoke(address operator, address target, bytes4 selector) external {
@@ -50,7 +50,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
 
     /// @notice Grant time-bounded full target approval.
     function grantFullWithExpiry(address operator, address target, uint48 expiry) external {
-        _setFull(msg.sender, operator, target, _normalizeExpiry(expiry));
+        _setFull(msg.sender, operator, target, _normalizeExpiryAllowPermanent(expiry));
     }
 
     /// @notice Revoke all approvals for operator on target.
@@ -81,7 +81,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             PermissionEntry calldata entry = entries[i];
             PermissionKey calldata key = entry.key;
             if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _grantSelector(key.owner, key.operator, key.target, key.selector, _normalizeExpiry(entry.expiry));
+            _grantSelector(key.owner, key.operator, key.target, key.selector, _normalizeExpiryAllowPermanent(entry.expiry));
         }
     }
 
@@ -204,13 +204,14 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
 
         bytes memory auth = permissions[owner][operator][target];
         if (auth.length == 4) {
-            _writeExpiry(auth, expiry);
-            permissions[owner][operator][target] = auth;
-            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
-            return;
+            uint32 fullExpiry = _readExpiry(auth);
+            if (fullExpiry != 0 && block.timestamp <= fullExpiry) {
+                emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(fullExpiry));
+                return;
+            }
         }
 
-        if (auth.length == 0) {
+        if (auth.length == 0 || auth.length == 4) {
             bytes memory fresh = new bytes(8);
             _writeExpiry(fresh, expiry);
             _writeSelector(fresh, 0, selector);

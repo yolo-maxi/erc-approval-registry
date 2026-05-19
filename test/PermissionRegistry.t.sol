@@ -896,6 +896,54 @@ contract PermissionRegistryTest is Test {
         lpWrapper.claim(managedId, recipient);
     }
 
+    function testGrantFullWithExpiryAcceptsPermanentSentinel() public {
+        vm.prank(owner);
+        registry.grantFullWithExpiry(operator, address(lpWrapper), type(uint48).max);
+
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+    }
+
+    function testGrantWithExpiryAcceptsPermanentSentinel() public {
+        vm.prank(owner);
+        registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, type(uint48).max);
+
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+    }
+
+    function testSelectorGrantDoesNotMutateExistingFullApproval() public {
+        uint48 fullExpiry = uint48(block.timestamp + 10 days);
+        uint48 shorterSelectorExpiry = uint48(block.timestamp + 1 days);
+
+        vm.prank(owner);
+        registry.grantFullWithExpiry(operator, address(lpWrapper), fullExpiry);
+
+        vm.prank(owner);
+        registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, shorterSelectorExpiry);
+
+        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), fullExpiry);
+        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 4);
+    }
+
+    function testSelectorGrantReplacesExpiredFullApproval() public {
+        uint48 fullExpiry = uint48(block.timestamp + 1 days);
+
+        vm.prank(owner);
+        registry.grantFullWithExpiry(operator, address(lpWrapper), fullExpiry);
+
+        vm.warp(block.timestamp + 1 days + 1);
+
+        vm.prank(owner);
+        registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
+
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(
+            registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector)
+        );
+        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 8);
+    }
+
     function testSelectorBundleRequiresSortedUniqueSelectors() public {
         bytes4[] memory unsorted = new bytes4[](2);
         unsorted[0] = bytes4(uint32(2));

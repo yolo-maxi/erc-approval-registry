@@ -148,11 +148,11 @@ If the blob contains selectors, the remaining bytes MUST be a sequence of `bytes
 
 MUST grant a permanent selector-scoped permission for `(msg.sender, operator, target, selector)`. MUST revert with `InvalidAddress` if any address argument is `address(0)`. MUST revert with `InvalidSelector` if `selector` is `bytes4(0)`. MUST emit `PermissionSet`.
 
-If the current authorization blob for `(msg.sender, operator, target)` is a full-target approval, implementations MAY leave it as a full-target approval and update its expiry, because the selector is already authorized by the broader approval. Otherwise, implementations MUST add `selector` to the selector bundle while preserving sorted uniqueness.
+If the current authorization blob for `(msg.sender, operator, target)` is an unexpired full-target approval, implementations SHOULD leave it unchanged because the selector is already authorized by the broader approval. A selector-scoped grant MUST NOT silently narrow, extend, or shorten an existing unexpired full-target approval. Otherwise, implementations MUST add `selector` to the selector bundle while preserving sorted uniqueness.
 
 **`grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry)`**
 
-MUST grant a selector-scoped permission until `expiry`. MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` or `InvalidSelector` under the same conditions as `grant`. MUST emit `PermissionSet`.
+MUST grant a selector-scoped permission until `expiry`. `type(uint48).max` MUST be treated as permanent. For finite expiries, the function MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` or `InvalidSelector` under the same conditions as `grant`. MUST emit `PermissionSet`. Because expiry is stored per `(owner, operator, target)` blob, updating a selector inside an existing selector bundle also updates the bundle-wide expiry for the other selectors in that blob.
 
 **`grantFull(address operator, address target)`**
 
@@ -160,11 +160,11 @@ MUST grant permanent full-target approval for `(msg.sender, operator, target)`. 
 
 **`grantFullWithExpiry(address operator, address target, uint48 expiry)`**
 
-MUST grant full-target approval until `expiry`. MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` under the same conditions as `grantFull`. MUST emit `PermissionSet` with `selector == bytes4(0)`.
+MUST grant full-target approval until `expiry`. `type(uint48).max` MUST be treated as permanent. For finite expiries, the function MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` under the same conditions as `grantFull`. MUST emit `PermissionSet` with `selector == bytes4(0)`.
 
 **`grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry)`**
 
-MUST replace the selector bundle for `(msg.sender, operator, target)` with exactly `selectors` and the provided expiry. `selectors` MUST be sorted, unique, and non-empty unless the implementation treats an empty list as full-target approval. MUST revert with `InvalidSelector` for zero, duplicate, or unsorted selectors. MUST revert with `InvalidExpiry` if the expiry is invalid. MUST emit `PermissionSet` for each selector made active.
+MUST replace the selector bundle for `(msg.sender, operator, target)` with exactly `selectors` and the provided expiry. `type(uint48).max` MUST be treated as permanent. `selectors` MUST be sorted, unique, and non-empty unless the implementation treats an empty list as full-target approval. MUST revert with `InvalidSelector` for zero, duplicate, or unsorted selectors. MUST revert with `InvalidExpiry` if the expiry is invalid. MUST emit `PermissionSet` for each selector made active.
 
 **`revoke(address operator, address target, bytes4 selector)`**
 
@@ -180,7 +180,7 @@ For each key in `keys`: MUST revert with `PermissionDenied` if `key.owner != msg
 
 **`grantBatchWithExpiry(PermissionEntry[] calldata entries)`**
 
-For each entry: MUST revert with `PermissionDenied` if `entry.key.owner != msg.sender`. MUST revert with `InvalidExpiry` if `entry.expiry == 0`, `entry.expiry <= block.timestamp`, or the expiry cannot be represented. Otherwise MUST behave as `grantWithExpiry`. MUST be atomic.
+For each entry: MUST revert with `PermissionDenied` if `entry.key.owner != msg.sender`. MUST revert with `InvalidExpiry` if the finite expiry is zero, in the past, or cannot be represented. Otherwise MUST behave as `grantWithExpiry`. MUST be atomic. Because expiry is bundle-wide, callers SHOULD avoid mixing different expiries for the same `(owner, operator, target)` in a single batch; the final effective expiry for that blob is determined by the resulting authorization blob, not by each selector independently.
 
 **`revokeBatch(PermissionKey[] calldata keys)`**
 

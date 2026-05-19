@@ -1,6 +1,8 @@
-# ERC Permissions
+# ERC Approval Registry
 
-A reference repo for a registry-based delegated authorization primitive.
+Draft ERC and reference implementation for a registry-based delegated authorization primitive.
+
+Status: pre-EIP public draft. The current canonical design is packed auth bytes with full-target approval and selector bundles.
 
 ## Core idea
 
@@ -42,6 +44,8 @@ Full-target approval is useful for trusted forwarders where the user wants to de
 - `rebalance()` on a treasury-like target
 
 without also authorizing more sensitive functions.
+
+One important constraint: expiry is bundle-wide for a given `(owner, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
 
 ## Gas summary
 
@@ -113,6 +117,12 @@ The target contract does not need to know whether the user granted full-target a
 
 - authorize `rebalance()`
 - do **not** authorize `transferTreasuryControl()`
+
+## Draft materials
+
+- [`SPEC.md`](./SPEC.md) — draft ERC text
+- [`Gas analysis.md`](./Gas%20analysis.md) — gas comparison and tradeoffs
+- [`docs/ethereum-magicians-post.md`](./docs/ethereum-magicians-post.md) — prepared forum post draft
 
 ## Run tests
 
