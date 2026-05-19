@@ -850,6 +850,77 @@ contract PermissionRegistryTest is Test {
     }
 
     // -------------------------------------------------------------------------
+    // Packed auth bytes / full approval tests
+    // -------------------------------------------------------------------------
+
+    function testFullApprovalAuthorizesAllSelectorsOnTarget() public {
+        uint256 managedId = _openLpPositionForOwner();
+
+        vm.prank(owner);
+        registry.grantFull(operator, address(lpWrapper));
+
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 4);
+
+        lpManager.seedFees(1, 3 ether, 5 ether);
+        vm.prank(operator);
+        lpWrapper.claim(managedId, recipient);
+
+        vm.prank(operator);
+        lpWrapper.transferManagedPosition(managedId, stranger);
+    }
+
+    function testRevokeAllClearsFullApproval() public {
+        uint256 managedId = _openLpPositionForOwner();
+
+        vm.startPrank(owner);
+        registry.grantFull(operator, address(lpWrapper));
+        registry.revokeAll(operator, address(lpWrapper));
+        vm.stopPrank();
+
+        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 0);
+
+        lpManager.seedFees(1, 1 ether, 2 ether);
+        vm.prank(operator);
+        vm.expectRevert(
+            abi.encodeWithSelector(
+                IPermissionRegistry.PermissionDenied.selector,
+                owner,
+                operator,
+                address(lpWrapper),
+                lpWrapper.claim.selector
+            )
+        );
+        lpWrapper.claim(managedId, recipient);
+    }
+
+    function testSelectorBundleRequiresSortedUniqueSelectors() public {
+        bytes4[] memory unsorted = new bytes4[](2);
+        unsorted[0] = bytes4(uint32(2));
+        unsorted[1] = bytes4(uint32(1));
+
+        vm.prank(owner);
+        vm.expectRevert(IPermissionRegistry.InvalidSelector.selector);
+        registry.grantSelectorBundle(operator, address(lpWrapper), unsorted, type(uint48).max);
+
+        bytes4[] memory sorted = new bytes4[](2);
+        sorted[0] = lpWrapper.claim.selector < lpWrapper.transferManagedPosition.selector
+            ? lpWrapper.claim.selector
+            : lpWrapper.transferManagedPosition.selector;
+        sorted[1] = lpWrapper.claim.selector < lpWrapper.transferManagedPosition.selector
+            ? lpWrapper.transferManagedPosition.selector
+            : lpWrapper.claim.selector;
+
+        vm.prank(owner);
+        registry.grantSelectorBundle(operator, address(lpWrapper), sorted, type(uint48).max);
+
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+    }
+
+    // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 

@@ -1,8 +1,8 @@
 ---
 eip: XXXX
-title: Function-Scoped Delegated Authorization Registry
-description: A registry primitive for granting operators narrowly-scoped, per-function authorization over an owner's positions without custody transfer.
-author: Ocean Vael
+title: Scoped Delegated Authorization Registry
+description: A registry primitive for granting operators scoped authorization over an owner's positions without custody transfer, supporting full-target approvals and selector bundles.
+author: Ocean Vael, Francesco Renzi
 discussions-to: (TBD)
 status: Draft
 type: Standards Track
@@ -13,7 +13,7 @@ requires: 712
 
 ## Abstract
 
-This ERC defines a registry-based authorization primitive that allows an owner to grant an operator the right to call a specific function on a specific contract — and nothing more. Permissions are identified by a four-element key `(owner, operator, target, selector)` and stored as `uint48` expiry timestamps, making time-bounded grants a first-class feature. An EIP-712 signed permit enables gasless delegation without a prior on-chain transaction from the owner. Integrating contracts adopt the standard by calling a single view function on the registry inside a modifier.
+This ERC defines a registry-based authorization primitive that allows an owner to grant an operator the right to call functions on a specific target contract without transferring custody. Permissions are stored per `(owner, operator, target)` as a compact authorization blob: either an expiry-only full-target approval, or an expiry followed by a sorted bundle of authorized function selectors. Time-bounded grants are first-class, and an EIP-712 signed permit enables gasless delegation without a prior on-chain transaction from the owner. Integrating contracts adopt the standard by calling a single view function on the registry inside a modifier.
 
 ## Motivation
 
@@ -25,7 +25,9 @@ DeFi protocols increasingly want to support automation, social trading, and inte
 
 **Bespoke per-protocol authorization** solves the problem for a single protocol but is not composable: wallets cannot render a unified view of what a user has delegated across applications, and operators must integrate separately with every protocol they interact with.
 
-What is missing is a standard, selector-scoped permission primitive: one that any contract can integrate with a single line of code, that wallets can index and display uniformly, and that covers the common delegation patterns — automation, compounding bots, social copying — without requiring custody transfer. This ERC defines that primitive.
+What is missing is a standard delegated-authorization primitive: one that any contract can integrate with a single line of code, that wallets can index and display uniformly, and that covers common delegation patterns — automation, forwarders, compounding bots, social copying — without requiring custody transfer. This ERC defines that primitive with two useful modes: cheap full-target approval for trusted forwarders, and selector-bundle approval for narrower delegation.
+
+Human-readable signing is an important complementary concern, but it does not need to be solved entirely inside the primitive itself. A registry with a small, stable payload shape — `(owner, operator, target, selectors, expiry)` — is straightforward for wallets to render directly, while richer descriptions of delegated actions can be layered on through verified ABI metadata or descriptor standards such as ERC-7730. Wallets SHOULD clearly distinguish full-target approvals from selector-scoped approvals.
 
 ## Specification
 
@@ -36,9 +38,11 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 - **Owner** — the address whose account, position, or assets the permission governs.
 - **Operator** — the address being authorized to act on the owner's behalf.
 - **Target** — the contract on which the operator is authorized to call a function.
-- **Selector** — the four-byte ABI function selector (`bytes4`) of the specific function the operator may call.
-- **Permission key** — the four-element tuple `(owner, operator, target, selector)`.
-- **Expiry** — a `uint48` Unix timestamp. `0` means the permission is not set or has been revoked; `type(uint48).max` means the permission never expires.
+- **Selector** — the four-byte ABI function selector (`bytes4`) of a function the operator may call.
+- **Selector bundle** — a sorted, unique list of `bytes4` selectors that share one expiry.
+- **Full-target approval** — an approval for every selector on a target contract until the stored expiry.
+- **Permission key** — the three-element tuple `(owner, operator, target)` that maps to an authorization blob.
+- **Expiry** — an externally-visible `uint48` Unix timestamp. `0` means the permission is not set or has been revoked; `type(uint48).max` means the permission never expires. Implementations MAY store this more compactly, for example as a `uint32` timestamp with `type(uint32).max` as the permanent sentinel.
 
 ### Interface
 
@@ -90,6 +94,13 @@ interface IPermissionRegistry {
     function grant(address operator, address target, bytes4 selector) external;
     function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external;
     function revoke(address operator, address target, bytes4 selector) external;
+
+    function grantFull(address operator, address target) external;
+    function grantFullWithExpiry(address operator, address target, uint48 expiry) external;
+    function revokeAll(address operator, address target) external;
+
+    function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external;
+
     function grantBatch(PermissionKey[] calldata keys) external;
     function grantBatchWithExpiry(PermissionEntry[] calldata entries) external;
     function revokeBatch(PermissionKey[] calldata keys) external;
@@ -102,6 +113,8 @@ interface IPermissionRegistry {
         external view;
     function permissionExpiry(address owner, address operator, address target, bytes4 selector)
         external view returns (uint48);
+    function rawPermissionData(address owner, address operator, address target)
+        external view returns (bytes memory);
 
     function permissionNonce(address owner) external view returns (uint256);
 }
@@ -109,27 +122,57 @@ interface IPermissionRegistry {
 
 ### Permission Storage
 
-The registry MUST store each permission as a `uint48` expiry value keyed by `(owner, operator, target, selector)`. The encoding is:
+The registry MUST expose authorization as a single authorization blob per `(owner, operator, target)` permission key. The canonical encoding is:
 
-| Stored value | Meaning |
-|---|---|
-| `0` | Permission not set or revoked |
-| `type(uint48).max` | Permanent permission (never expires) |
-| Any other value | Permission expires at that Unix timestamp |
+```text
+auth.length == 0: no approval
+auth.length == 4: expiry only, meaning full-target approval
+auth.length > 4: expiry followed by a selector bundle
+```
+
+The first four bytes encode the expiry. The reference implementation stores expiry as `uint32`, where:
+
+- `0` means not set or revoked.
+- `type(uint32).max` means permanent permission.
+- Any other value means the permission expires at that Unix timestamp.
+
+The externally-visible API continues to use `uint48` so the permanent sentinel remains `type(uint48).max`. Implementations that store a compact expiry MUST map external `type(uint48).max` to their internal permanent sentinel and MUST reject non-permanent expiries that cannot be represented by the storage encoding.
+
+If the blob contains only the expiry, the operator is authorized for any selector on the target until the expiry. This mode is intended for trusted forwarders and other cases where the owner wants to delegate the full target surface.
+
+If the blob contains selectors, the remaining bytes MUST be a sequence of `bytes4` selectors. The selector list MUST be sorted in ascending order and MUST NOT contain duplicates. Implementations MUST reject malformed selector bundles.
 
 ### Grant and Revoke Functions
 
 **`grant(address operator, address target, bytes4 selector)`**
 
-MUST set the permission for `(msg.sender, operator, target, selector)` to `type(uint48).max`. MUST revert with `InvalidAddress` if any address argument is `address(0)`. MUST revert with `InvalidSelector` if `selector` is `bytes4(0)`. MUST emit `PermissionSet`.
+MUST grant a permanent selector-scoped permission for `(msg.sender, operator, target, selector)`. MUST revert with `InvalidAddress` if any address argument is `address(0)`. MUST revert with `InvalidSelector` if `selector` is `bytes4(0)`. MUST emit `PermissionSet`.
+
+If the current authorization blob for `(msg.sender, operator, target)` is a full-target approval, implementations MAY leave it as a full-target approval and update its expiry, because the selector is already authorized by the broader approval. Otherwise, implementations MUST add `selector` to the selector bundle while preserving sorted uniqueness.
 
 **`grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry)`**
 
-MUST set the permission for `(msg.sender, operator, target, selector)` to `expiry`. MUST revert with `InvalidExpiry` if `expiry == 0` or `expiry <= block.timestamp`. MUST revert with `InvalidAddress` or `InvalidSelector` under the same conditions as `grant`. MUST emit `PermissionSet`.
+MUST grant a selector-scoped permission until `expiry`. MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` or `InvalidSelector` under the same conditions as `grant`. MUST emit `PermissionSet`.
+
+**`grantFull(address operator, address target)`**
+
+MUST grant permanent full-target approval for `(msg.sender, operator, target)`. Full-target approval authorizes the operator to call any selector on `target` until the approval expires or is revoked. MUST revert with `InvalidAddress` if any address argument is `address(0)`. MUST emit `PermissionSet` with `selector == bytes4(0)`.
+
+**`grantFullWithExpiry(address operator, address target, uint48 expiry)`**
+
+MUST grant full-target approval until `expiry`. MUST revert with `InvalidExpiry` if `expiry == 0`, `expiry <= block.timestamp`, or the expiry cannot be represented by the implementation's storage encoding. MUST revert with `InvalidAddress` under the same conditions as `grantFull`. MUST emit `PermissionSet` with `selector == bytes4(0)`.
+
+**`grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry)`**
+
+MUST replace the selector bundle for `(msg.sender, operator, target)` with exactly `selectors` and the provided expiry. `selectors` MUST be sorted, unique, and non-empty unless the implementation treats an empty list as full-target approval. MUST revert with `InvalidSelector` for zero, duplicate, or unsorted selectors. MUST revert with `InvalidExpiry` if the expiry is invalid. MUST emit `PermissionSet` for each selector made active.
 
 **`revoke(address operator, address target, bytes4 selector)`**
 
-MUST set the permission for `(msg.sender, operator, target, selector)` to `0`. MUST NOT revert if the permission was not previously set. MUST emit `PermissionSet`.
+MUST revoke `selector` from the selector bundle for `(msg.sender, operator, target)`. MUST NOT revert if the selector permission was not previously set. If the current authorization is full-target approval, `revoke` SHOULD NOT partially revoke one selector from the full approval; callers SHOULD use `revokeAll` and then grant a narrower selector bundle. MUST emit `PermissionSet`.
+
+**`revokeAll(address operator, address target)`**
+
+MUST revoke the entire authorization blob for `(msg.sender, operator, target)`. MUST NOT revert if no approval was previously set. MUST emit `PermissionSet` with `selector == bytes4(0)`.
 
 **`grantBatch(PermissionKey[] calldata keys)`**
 
@@ -137,7 +180,7 @@ For each key in `keys`: MUST revert with `PermissionDenied` if `key.owner != msg
 
 **`grantBatchWithExpiry(PermissionEntry[] calldata entries)`**
 
-For each entry: MUST revert with `PermissionDenied` if `entry.key.owner != msg.sender`. MUST revert with `InvalidExpiry` if `entry.expiry == 0` or `entry.expiry <= block.timestamp`. Otherwise MUST behave as `grantWithExpiry`. MUST be atomic.
+For each entry: MUST revert with `PermissionDenied` if `entry.key.owner != msg.sender`. MUST revert with `InvalidExpiry` if `entry.expiry == 0`, `entry.expiry <= block.timestamp`, or the expiry cannot be represented. Otherwise MUST behave as `grantWithExpiry`. MUST be atomic.
 
 **`revokeBatch(PermissionKey[] calldata keys)`**
 
@@ -147,21 +190,27 @@ For each key: MUST revert with `PermissionDenied` if `key.owner != msg.sender`. 
 
 **`isAuthorizedCall(address owner, address operator, address target, bytes4 selector) → bool`**
 
-MUST return `true` if and only if the stored expiry `e` for the key satisfies `e != 0 && block.timestamp <= e`. MUST NOT revert.
+MUST return `true` if and only if the authorization blob for `(owner, operator, target)` authorizes `selector` and the stored expiry is nonzero and not expired. MUST NOT revert.
+
+For expiry-only blobs, any nonzero `selector` MUST be considered authorized while the expiry is valid. For selector-bundle blobs, only selectors present in the bundle MUST be considered authorized.
 
 **`requireAuthorizedCall(address owner, address operator, address target, bytes4 selector)`**
 
-MUST revert with `PermissionDenied` if the stored expiry is `0`. MUST revert with `PermissionExpired` if the stored expiry is nonzero but `block.timestamp > expiry`. MUST return without reverting if the permission is valid. The distinction between `PermissionDenied` and `PermissionExpired` is REQUIRED so callers can differentiate between a permission that was never granted and one that has lapsed.
+MUST revert with `PermissionDenied` if the authorization blob does not authorize `selector`. MUST revert with `PermissionExpired` if the blob authorizes `selector` but the expiry has passed. MUST return without reverting if the permission is valid. The distinction between `PermissionDenied` and `PermissionExpired` is REQUIRED so callers can differentiate between a permission that was never granted and one that has lapsed.
 
 **`permissionExpiry(address owner, address operator, address target, bytes4 selector) → uint48`**
 
-MUST return the raw stored value for the given key without any interpretation. A return value of `0` means not set or revoked; `type(uint48).max` means permanent.
+MUST return the externally-visible expiry for `selector` under `(owner, operator, target)`. If the authorization blob is full-target approval and not empty, this MUST return the full-target expiry for any selector. If `selector` is not authorized, this MUST return `0`. A return value of `type(uint48).max` means permanent.
+
+**`rawPermissionData(address owner, address operator, address target) → bytes`**
+
+MUST return the raw authorization blob for `(owner, operator, target)`. This function exists for indexers, wallets, and offchain tooling that want to inspect whether an approval is full-target or selector-bundled without testing individual selectors.
 
 ### The PermissionSet Event
 
-A `PermissionSet` event MUST be emitted on every call to `grant`, `grantWithExpiry`, `revoke`, `grantBatch`, `grantBatchWithExpiry`, `revokeBatch`, and `permitPermission` that modifies state. The `approved` field MUST be `true` if the resulting expiry is nonzero, and `false` if it is `0`. The `expiry` field MUST reflect the value written to storage.
+A `PermissionSet` event MUST be emitted on every call to `grant`, `grantWithExpiry`, `grantFull`, `grantFullWithExpiry`, `grantSelectorBundle`, `revoke`, `revokeAll`, `grantBatch`, `grantBatchWithExpiry`, `revokeBatch`, and `permitPermission` that modifies state. The `approved` field MUST be `true` if the resulting expiry is nonzero, and `false` if it is `0`. The `expiry` field MUST reflect the externally-visible expiry.
 
-Indexers can reconstruct the complete set of active permissions and their expiries from `PermissionSet` events alone, without querying contract state.
+For full-target approvals and full revocations, implementations MUST emit `PermissionSet` with `selector == bytes4(0)`. Indexers SHOULD interpret this as an update to the whole `(owner, operator, target)` authorization. Selector-specific events remain selector-scoped. Indexers MAY reconstruct active permissions from events, but SHOULD query `rawPermissionData` when they need the exact current full-target versus selector-bundle representation.
 
 ### Gasless Permit
 
@@ -175,7 +224,7 @@ A call to `permitPermission` MUST:
 2. Revert with `InvalidExpiry` if `permit.expiry != 0 && permit.expiry <= block.timestamp`.
 3. Revert with `InvalidNonce(current, permit.nonce)` if `permit.nonce` does not equal `permissionNonce[permit.owner]`.
 4. Revert with `InvalidSignature` if the recovered signer of the EIP-712 digest (defined below) is not `permit.owner`.
-5. On success: increment `permissionNonce[permit.owner]` by 1, write `permit.expiry` to the permission slot for `(permit.owner, permit.operator, permit.target, permit.selector)`, and emit `PermissionSet`.
+5. On success: increment `permissionNonce[permit.owner]` by 1, apply `permit.expiry` to the selector-scoped permission for `(permit.owner, permit.operator, permit.target, permit.selector)`, and emit `PermissionSet`.
 
 The EIP-712 typed data structure is:
 
@@ -206,7 +255,19 @@ keccak256(abi.encode(
 ))
 ```
 
-The digest signed by the owner is:
+A `PermissionPermit` signature authorizes a specific selector-scoped change in a specific registry contract on a specific chain. It does not create full-target approval; full-target approvals SHOULD use an explicit full-approval signing flow if implemented.
+
+In human terms, the signed message says:
+
+- **owner** — I am authorizing a change to my approval state
+- **operator** — this is the address that may act on my behalf
+- **target** — this is the contract the operator may call
+- **selector** — this is the specific function the operator may call on that contract
+- **expiry** — this approval is revoked (`0`), permanent (`type(uint48).max`), or valid until this timestamp
+- **nonce** — this authorization can only be used once at this specific nonce
+- **deadline** — this signed message itself expires after this timestamp
+
+The signature payload MUST be the EIP-712 typed-data digest formed from the registry's domain separator and the `PermissionPermit` struct hash:
 
 ```
 keccak256(abi.encodePacked(
@@ -216,9 +277,27 @@ keccak256(abi.encodePacked(
 ))
 ```
 
-where `DOMAIN_SEPARATOR` is the EIP-712 domain separator with `name = "PermissionRegistry"` and `version = "1"`.
+Equivalently, this is the standard EIP-712 encoding of:
 
-The `expiry` field in `PermissionPermit` follows the same encoding as a direct grant: `0` means revoke, `type(uint48).max` means permanent. A single signed permit can therefore express a temporary delegation, a permanent delegation, or a gasless revocation.
+- `domain = EIP712Domain(name: "PermissionRegistry", version: "1", chainId, verifyingContract)`
+- `message = PermissionPermit(...)`
+
+This means the owner is not signing a vague authorization. They are signing an approval that is bound to:
+
+- one registry contract (`verifyingContract`)
+- one chain (`chainId`)
+- one operator
+- one target contract
+- one function selector
+- one expiry value
+- one nonce
+- one permit deadline
+
+where `DOMAIN_SEPARATOR` is the EIP-712 domain separator for the registry contract on the current chain.
+
+Wallets and signing applications SHOULD present the `target` and `selector` fields in as human-readable a form as possible. In particular, applications SHOULD attempt to resolve `selector` to a function signature or display label when reliable ABI metadata for `target` is available. If no such metadata is available, applications MUST NOT guess; they SHOULD display the raw selector and make clear that it identifies the specific function being approved.
+
+The `expiry` field in `PermissionPermit` follows the same external encoding as a direct grant: `0` means revoke, `type(uint48).max` means permanent. A single signed permit can therefore express a temporary selector delegation, a permanent selector delegation, or a gasless selector revocation.
 
 The `signature` MUST be a 65-byte `secp256k1` signature in the format `r ++ s ++ v`. High-s signatures MUST be rejected.
 
@@ -247,13 +326,29 @@ Each function on the target contract that should be independently delegatable MU
 
 ## Rationale
 
-### Four-element key
+### Three-element storage key plus selector payload
 
-The key `(owner, operator, target, selector)` is the minimal set of dimensions needed to express the primitive without ambiguity. Omitting `owner` would require a separate registry per user or per contract. Omitting `target` would require the registry to somehow know which contract is being called. Omitting `selector` reduces the primitive to a contract-level approval, which is not much better than an ERC-20 approval. Adding further dimensions (e.g. parameter constraints, chain ID) would require integrators to commit to a parameter encoding scheme at the standard level, which is premature.
+The storage key `(owner, operator, target)` is the minimal set of dimensions needed to identify who is delegating, who is being delegated to, and which contract is affected. Function scope is represented inside the authorization blob rather than as the final mapping key.
 
-### uint48 expiry rather than bool plus a separate expiry mapping
+This is slightly more complex than a four-level `(owner, operator, target, selector)` mapping, but it enables an important full-target approval path. For trusted forwarders and automation contracts, users often want to delegate every supported action on a target. Encoding that as an expiry-only blob gives this use case one storage slot and an O(1) authorization check, with gas comparable to a standard ERC-20 approval.
 
-Storing a single `uint48` per key encodes three states — not set, permanent, and time-bounded — without a second mapping or a packed struct. `uint48` is sufficient for any plausible timestamp (it covers dates through year 891,000). The encoding makes every read a single `SLOAD` and keeps the implementation easy to audit. An alternative of `bool approved` plus `uint48 expiry` in a packed struct was considered but rejected on the grounds that the two fields are not independently meaningful.
+Selector bundles remain available for narrower delegation. They are cheaper to approve than writing one storage slot per selector, but they make selector checks O(n) in the number of selectors scanned. This is an intentional tradeoff: broad trusted delegation gets the cheapest hot path, while narrower delegation pays a small per-check cost for finer scope.
+
+Using `bytes4 selector` instead of a human-readable function string prioritizes canonical onchain correctness over presentation. A selector is unambiguous at the EVM level and cheap to store, compare, and verify. However, selector values alone are not always self-explanatory to end users. This standard therefore makes clear signing possible, but not fully self-describing in isolation: wallet readability depends on the ability of signing software to map `(target, selector)` to verified ABI metadata and present an intelligible function label.
+
+### Wallet rendering and clear signing
+
+This standard is intentionally compatible with wallet-side clear-signing systems, but does not depend on them for correctness. The registry's own authorization flows are designed to be easy for wallets to render because they expose a compact, explicit set of fields: `owner`, `operator`, `target`, `selector`, and `expiry`.
+
+If a wallet recognizes the registry contract and its ABI or descriptor metadata, it can already present a correct high-level statement such as "Allow `operator` to call selector `0x12345678` on `target` until `expiry`". If the delegated target contract also has verified ABI metadata or a richer descriptor format such as ERC-7730, the wallet MAY further resolve `selector` into a human-readable function label or intent, such as `claim()` or `Claim rewards`.
+
+Accordingly, rich target-level rendering is treated as an ecosystem improvement, not a prerequisite for this ERC. The primitive remains valid and useful even when wallets only support first-class rendering of the registry layer itself.
+
+### Compact expiry encoding
+
+The external interface uses `uint48` expiry values because `0`, finite timestamps, and `type(uint48).max` provide clear user-facing semantics. The packed-auth storage design can store the expiry more compactly. The reference implementation uses `uint32`, where `type(uint32).max` is permanent and finite expiries are valid until February 2106.
+
+This is a deliberate engineering tradeoff. Four bytes lets full-target approvals fit in a short bytes value and keeps selector bundles compact. The year-2106 finite-expiry limit is acceptable for delegated authorization: any approval that needs to outlive that horizon can use the permanent sentinel, and realistic time-bounded permissions are much shorter.
 
 ### Distinct PermissionDenied and PermissionExpired errors
 
@@ -284,12 +379,14 @@ This ERC introduces a new registry contract and a new modifier pattern. It does 
 The reference test suite at [`test/PermissionRegistry.t.sol`](./test/PermissionRegistry.t.sol) covers:
 
 - Owner direct access (bypasses registry check)
-- Granting and revoking single permissions
+- Granting and revoking single selector permissions
+- Full-target approval and revocation
+- Selector-bundle approval and sorted selector validation
 - Time-bounded grants: valid before expiry, expired after
 - Expiry boundary condition (inclusive at `block.timestamp == expiry`)
 - Overwriting a permanent grant with a time-bounded one and vice versa
 - Batch grant atomicity: a single invalid key reverts the entire batch with no partial writes
-- Permission key isolation: grants are scoped to `(owner, operator, target, selector)`; a stranger's `revoke` call cannot affect an owner's permission slot
+- Permission key isolation: grants are scoped to `(owner, operator, target)` plus selector payload; a stranger's `revoke` call cannot affect an owner's permission
 - Operator isolation: an operator cannot revoke the permission granted to them by an owner
 - Multiple owners granting to the same operator are independent
 - `permitPermission`: correct grant and revoke, wrong signer, expired deadline, skipped nonce, replay rejection
