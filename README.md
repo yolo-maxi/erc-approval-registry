@@ -1,68 +1,112 @@
 # ERC Approval Registry
 
-Draft ERC and reference implementation for a registry-based delegated authorization primitive.
+Draft ERC and reference implementation for scoped delegated authorization.
 
-Status: pre-EIP public draft. The current canonical design is packed auth bytes with full-target approval and selector bundles.
+Status: pre-EIP public draft.
 
-## Core idea
+## The problem
 
-An owner can authorize an operator on a target contract without transferring custody.
+Today, most onchain delegation is too broad.
 
-The new canonical design stores one compact authorization blob per:
+If a user wants an operator to do one useful thing — claim fees, compound rewards, rebalance a position, execute through a trusted forwarder — they usually end up choosing between bad options:
 
-- owner
-- operator
-- target
+- transfer custody into a vault
+- grant a broad token approval
+- rely on bespoke per-protocol permission logic
+- give an automation contract more power than the task actually needs
 
-The blob can represent:
+That is awkward for users, hard for wallets to explain, and non-composable for protocols.
 
-- no approval
-- full-target approval
-- selector-bundle approval
+## The core idea
 
-That gives us a cheap forwarder path while still supporting narrower permissions.
+ERC Approval Registry gives contracts a shared authorization primitive:
 
-## Authorization encoding
+> Owner authorizes operator to call specific functions on a target contract, without transferring custody.
 
-```text
-auth.length == 0: no approval
-auth.length == 4: expiry only = full target approval
-auth.length > 4: uint32 expiry || sorted bytes4 selectors...
+A permission is scoped by:
+
+- owner — whose position/account/assets are being acted on
+- operator — who is allowed to act
+- target — which contract they may call
+- selector — which function they may call, unless the owner grants full-target approval
+- expiry — when the permission stops working
+
+The registry supports two modes:
+
+- **Selector approval** for narrow permissions like `claim()` but not `transfer()`
+- **Full-target approval** for trusted forwarders where the user intentionally delegates the whole target surface
+
+## What integration looks like
+
+An integrating contract only needs to ask the registry before allowing an operator to act for an owner.
+
+```solidity
+modifier onlyAuthorized(address owner) {
+    if (msg.sender != owner) {
+        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+    }
+    _;
+}
 ```
 
-Expiry rules:
+The target contract does not need to know whether the user granted full-target approval or a selector bundle. It just asks whether `msg.sender` is authorized for `msg.sig`.
 
-- `0` means revoked / not set
-- `uint32.max` is the internal permanent sentinel
-- external APIs still expose `type(uint48).max` as permanent
-- finite `uint32` timestamps are valid until February 2106
+## Simple example
 
-Full-target approval is useful for trusted forwarders where the user wants to delegate the whole target surface. Selector bundles are useful when the user wants narrower authorization such as:
+A user owns an LP position managed by a wrapper contract.
 
-- `claim()` on an LP wrapper
-- `claimRewards()` on a staking wrapper
-- `rebalance()` on a treasury-like target
+They want a bot to claim fees, but they do **not** want the bot to transfer the position.
 
-without also authorizing more sensitive functions.
+With the registry, the user grants the bot permission for only the claim selector on the wrapper target:
 
-One important constraint: expiry is bundle-wide for a given `(owner, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
+```solidity
+registry.grant(
+    bot,
+    address(lpWrapper),
+    lpWrapper.claim.selector
+);
+```
 
-## Gas summary
+Now the bot can call `claim()` for that user, but calls to more sensitive functions like `transferManagedPosition()` fail unless separately authorized.
 
-See [`Gas analysis.md`](./Gas%20analysis.md) for the detailed measurements.
+## Why this is useful
 
-Short version:
+For users:
 
-- Full-target approval is roughly ERC20 approval territory.
-- Full-target checks are O(1) and measured around 2.6k gas in the reference implementation.
-- Selector bundles are much cheaper to approve than writing one storage slot per selector.
-- Selector-bundle checks are O(n), so large bundles are not ideal for very hot partial-permission paths.
+- keep custody of positions and accounts
+- delegate specific actions instead of broad control
+- use expiries for temporary automation
+- revoke permissions from one standard place
 
-The intended tradeoff:
+For protocols:
 
-- trusted forwarder → use full-target approval
-- narrow occasional delegation → use selector bundle
-- extremely hot narrow delegation → be aware of bundle scan cost
+- add delegated execution with a small modifier
+- avoid building bespoke permission systems
+- support automation, social trading, keepers, trusted forwarders, and intent flows
+- give wallets and indexers a common permission surface to display
+
+For wallets and agents:
+
+- permissions have a stable shape: owner, operator, target, selectors, expiry
+- selector-scoped approvals can be rendered more clearly than token allowances
+- revocation and permission discovery can be standardized across apps
+
+## Example behaviors covered in this repo
+
+### LP wrapper
+
+- authorize `claim()`
+- do **not** authorize `transferManagedPosition()`
+
+### Staking wrapper
+
+- authorize `claimRewards()`
+- do **not** authorize `unstake()`
+
+### Treasury-like target
+
+- authorize `rebalance()`
+- do **not** authorize `transferTreasuryControl()`
 
 ## What is in here
 
@@ -88,35 +132,69 @@ The intended tradeoff:
 - `test/PermissionRegistry.t.sol`
 - `test/AuthGasBench.t.sol`
 
-## Integration pattern
+## Grant types
+
+The public interface includes:
 
 ```solidity
-modifier onlyAuthorized(address owner) {
-    if (msg.sender != owner) {
-        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
-    }
-    _;
-}
+function grant(address operator, address target, bytes4 selector) external;
+function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external;
+function revoke(address operator, address target, bytes4 selector) external;
+
+function grantFull(address operator, address target) external;
+function grantFullWithExpiry(address operator, address target, uint48 expiry) external;
+function revokeAll(address operator, address target) external;
+
+function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external;
 ```
 
-The target contract does not need to know whether the user granted full-target approval or a selector bundle. It just asks the registry whether `msg.sender` is authorized for `msg.sig`.
+Use selector grants when the operator should only do specific actions. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
 
-## Example behaviors covered
+One important semantic constraint: expiry is bundle-wide for a given `(owner, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
 
-### LP wrapper
+## Implementation notes
 
-- authorize `claim()`
-- do **not** authorize `transferManagedPosition()`
+The current canonical design stores one compact authorization blob per `(owner, operator, target)`.
 
-### Staking wrapper
+The blob can represent:
 
-- authorize `claimRewards()`
-- do **not** authorize `unstake()`
+- no approval
+- full-target approval
+- selector-bundle approval
 
-### Treasury-like target
+Canonical encoding:
 
-- authorize `rebalance()`
-- do **not** authorize `transferTreasuryControl()`
+```text
+auth.length == 0: no approval
+auth.length == 4: expiry only = full target approval
+auth.length > 4: uint32 expiry || sorted bytes4 selectors...
+```
+
+Expiry rules:
+
+- `0` means revoked / not set
+- `uint32.max` is the internal permanent sentinel
+- external APIs expose `type(uint48).max` as permanent
+- finite `uint32` timestamps are valid until February 2106
+
+The packed representation gives a cheap forwarder path while making selector bundles much cheaper to grant than writing one storage slot per selector.
+
+## Gas summary
+
+See [`Gas analysis.md`](./Gas%20analysis.md) for the detailed measurements.
+
+Short version:
+
+- Full-target approval is roughly ERC20 approval territory.
+- Full-target checks are O(1) and measured around 2.6k gas in the reference implementation.
+- Selector bundles are much cheaper to approve than writing one storage slot per selector.
+- Selector-bundle checks are O(n), so large bundles are not ideal for very hot partial-permission paths.
+
+The intended tradeoff:
+
+- trusted forwarder → use full-target approval
+- narrow occasional delegation → use selector bundle
+- extremely hot narrow delegation → be aware of bundle scan cost
 
 ## Draft materials
 
