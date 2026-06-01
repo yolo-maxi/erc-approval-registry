@@ -15,9 +15,9 @@ Hi everyone,
 
 I’m working on a draft ERC for a registry-based delegated authorization primitive and would love feedback before opening the EIP PR.
 
-- Repo: (TBD)
-- Spec: `SPEC.md`
-- Gas analysis: `Gas analysis.md`
+- Repo: https://github.com/yolo-maxi/erc-approval-registry
+- Spec: https://github.com/yolo-maxi/erc-approval-registry/blob/master/SPEC.md
+- Gas analysis: https://github.com/yolo-maxi/erc-approval-registry/blob/master/Gas%20analysis.md
 
 ## Problem
 
