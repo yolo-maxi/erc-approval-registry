@@ -9,7 +9,7 @@ This note compares the old selector-mapping baseline against the current packed-
 Storage shape:
 
 ```solidity
-mapping(address owner => mapping(address operator => mapping(address target => mapping(bytes4 selector => uint48 expiry)))) permissions;
+mapping(address user => mapping(address operator => mapping(address target => mapping(bytes4 selector => uint48 expiry)))) permissions;
 ```
 
 Semantics:
@@ -30,7 +30,7 @@ Hot-path check:
 Storage shape:
 
 ```solidity
-mapping(address owner => mapping(address operator => mapping(address target => bytes auth))) permissions;
+mapping(address user => mapping(address operator => mapping(address target => bytes auth))) permissions;
 ```
 
 Suggested encoding:
@@ -48,11 +48,11 @@ Where:
 - If only the 4-byte expiry is present, the operator is approved for all selectors on the target.
 - If selectors are present, the operator is approved only for those selectors.
 - Selectors should be sorted and unique to allow early exit during scans.
-- Expiry is bundle-wide for each `(owner, operator, target)` blob, not per selector.
+- Expiry is bundle-wide for each `(user, operator, target)` blob, not per selector.
 
 Hot-path check:
 
-- Load the auth blob for `(owner, operator, target)`.
+- Load the auth blob for `(user, operator, target)`.
 - Check expiry.
 - If the blob is expiry-only, return true for any selector.
 - Otherwise iterate over the sorted selector list until match or early exit.
@@ -246,7 +246,7 @@ Weaknesses:
 - Selector-bundle checks are O(n).
 - Hot partial permissions become more expensive as bundle size grows.
 - The implementation is more subtle than a simple nested mapping.
-- Expiry is bundle-wide, not per selector; different expiries for different selectors under the same `(owner, operator, target)` are intentionally not supported.
+- Expiry is bundle-wide, not per selector; different expiries for different selectors under the same `(user, operator, target)` are intentionally not supported.
 - Uses `uint32` expiry internally, which is fine until February 2106 but shorter than the external `uint48` timestamp range.
 
 Best fit:

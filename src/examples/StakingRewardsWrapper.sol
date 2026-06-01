@@ -7,7 +7,7 @@ import {MockStakingRewardsManager} from "./MockStakingRewardsManager.sol";
 /// @notice Example wrapper for staking positions with function-scoped permissions.
 contract StakingRewardsWrapper is PermissionedTarget {
     struct ManagedStake {
-        address owner;
+        address user;
         uint256 positionId;
     }
 
@@ -15,29 +15,29 @@ contract StakingRewardsWrapper is PermissionedTarget {
     uint256 public nextManagedId = 1;
     mapping(uint256 managedId => ManagedStake stakePosition) public managedStakes;
 
-    event ManagedStakeOpened(uint256 indexed managedId, address indexed owner, uint256 indexed positionId);
+    event ManagedStakeOpened(uint256 indexed managedId, address indexed user, uint256 indexed positionId);
     event RewardsClaimed(uint256 indexed managedId, address indexed recipient, uint256 amount);
     event Unstaked(uint256 indexed managedId, uint128 amount);
-    event ManagedStakeTransferred(uint256 indexed managedId, address indexed oldOwner, address indexed newOwner);
+    event ManagedStakeTransferred(uint256 indexed managedId, address indexed oldUser, address indexed newUser);
 
     constructor(address registry_, address manager_) PermissionedTarget(registry_) {
         manager = MockStakingRewardsManager(manager_);
     }
 
-    function openManagedStake(address owner, uint128 amount)
+    function openManagedStake(address user, uint128 amount)
         external
-        onlyAuthorized(owner)
+        onlyAuthorized(user)
         returns (uint256 managedId, uint256 positionId)
     {
-        positionId = manager.openPosition(owner, amount);
+        positionId = manager.openPosition(user, amount);
         managedId = nextManagedId++;
-        managedStakes[managedId] = ManagedStake({owner: owner, positionId: positionId});
-        emit ManagedStakeOpened(managedId, owner, positionId);
+        managedStakes[managedId] = ManagedStake({user: user, positionId: positionId});
+        emit ManagedStakeOpened(managedId, user, positionId);
     }
 
     function claimRewards(uint256 managedId, address recipient)
         external
-        onlyAuthorized(managedStakes[managedId].owner)
+        onlyAuthorized(managedStakes[managedId].user)
         returns (uint256 amount)
     {
         ManagedStake memory stakePosition = managedStakes[managedId];
@@ -45,17 +45,17 @@ contract StakingRewardsWrapper is PermissionedTarget {
         emit RewardsClaimed(managedId, recipient, amount);
     }
 
-    function unstake(uint256 managedId, uint128 amount) external onlyAuthorized(managedStakes[managedId].owner) {
+    function unstake(uint256 managedId, uint128 amount) external onlyAuthorized(managedStakes[managedId].user) {
         manager.unstake(managedStakes[managedId].positionId, amount);
         emit Unstaked(managedId, amount);
     }
 
-    function transferManagedStake(uint256 managedId, address newOwner)
+    function transferManagedStake(uint256 managedId, address newUser)
         external
-        onlyAuthorized(managedStakes[managedId].owner)
+        onlyAuthorized(managedStakes[managedId].user)
     {
-        address oldOwner = managedStakes[managedId].owner;
-        managedStakes[managedId].owner = newOwner;
-        emit ManagedStakeTransferred(managedId, oldOwner, newOwner);
+        address oldUser = managedStakes[managedId].user;
+        managedStakes[managedId].user = newUser;
+        emit ManagedStakeTransferred(managedId, oldUser, newUser);
     }
 }

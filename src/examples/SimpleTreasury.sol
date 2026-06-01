@@ -5,28 +5,28 @@ import {PermissionedTarget} from "../base/PermissionedTarget.sol";
 
 /// @notice Tiny non-wrapper example showing function-scoped auth on a treasury-like contract.
 contract SimpleTreasury is PermissionedTarget {
-    mapping(address owner => uint256 feesClaimed) public claimedFees;
-    mapping(address owner => uint256 rebalanceCount) public rebalances;
-    mapping(address owner => address treasuryOwner) public delegates;
+    mapping(address user => uint256 feesClaimed) public claimedFees;
+    mapping(address user => uint256 rebalanceCount) public rebalances;
+    mapping(address user => address treasuryDelegate) public delegates;
 
-    event FeesClaimed(address indexed owner, address indexed recipient, uint256 amount);
-    event Rebalanced(address indexed owner, uint256 newCount);
-    event TreasuryControlTransferred(address indexed owner, address indexed newOwner);
+    event FeesClaimed(address indexed user, address indexed recipient, uint256 amount);
+    event Rebalanced(address indexed user, uint256 newCount);
+    event TreasuryControlTransferred(address indexed user, address indexed newUser);
 
     constructor(address registry_) PermissionedTarget(registry_) {}
 
-    function claimFees(address owner, address recipient, uint256 amount) external onlyAuthorized(owner) {
-        claimedFees[owner] += amount;
-        emit FeesClaimed(owner, recipient, amount);
+    function claimFees(address user, address recipient, uint256 amount) external onlyAuthorized(user) {
+        claimedFees[user] += amount;
+        emit FeesClaimed(user, recipient, amount);
     }
 
-    function rebalance(address owner) external onlyAuthorized(owner) {
-        rebalances[owner] += 1;
-        emit Rebalanced(owner, rebalances[owner]);
+    function rebalance(address user) external onlyAuthorized(user) {
+        rebalances[user] += 1;
+        emit Rebalanced(user, rebalances[user]);
     }
 
-    function transferTreasuryControl(address owner, address newOwner) external onlyAuthorized(owner) {
-        delegates[owner] = newOwner;
-        emit TreasuryControlTransferred(owner, newOwner);
+    function transferTreasuryControl(address user, address newUser) external onlyAuthorized(user) {
+        delegates[user] = newUser;
+        emit TreasuryControlTransferred(user, newUser);
     }
 }

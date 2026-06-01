@@ -18,13 +18,13 @@ contract PermissionRegistryTest is Test {
     StakingRewardsWrapper internal stakingWrapper;
     SimpleTreasury internal treasury;
 
-    address internal owner;
+    address internal user;
     address internal operator;
     address internal stranger;
     address internal recipient;
 
     function setUp() public {
-        owner = makeAddr("owner");
+        user = makeAddr("user");
         operator = makeAddr("operator");
         stranger = makeAddr("stranger");
         recipient = makeAddr("recipient");
@@ -40,23 +40,23 @@ contract PermissionRegistryTest is Test {
         treasury = new SimpleTreasury(address(registry));
     }
 
-    function testOwnerCanOpenPositionWithoutRegistryPermission() public {
-        vm.prank(owner);
-        (uint256 managedId, uint256 tokenId) = lpWrapper.openManagedPosition(owner, -60, 60, 1_000);
+    function testUserCanOpenPositionWithoutRegistryPermission() public {
+        vm.prank(user);
+        (uint256 managedId, uint256 tokenId) = lpWrapper.openManagedPosition(user, -60, 60, 1_000);
 
         assertEq(managedId, 1);
         assertEq(tokenId, 1);
 
-        (address storedOwner, uint256 storedTokenId) = lpWrapper.managedPositions(managedId);
-        assertEq(storedOwner, owner);
+        (address storedUser, uint256 storedTokenId) = lpWrapper.managedPositions(managedId);
+        assertEq(storedUser, user);
         assertEq(storedTokenId, tokenId);
     }
 
     function testLpClaimCanBeAuthorizedWithoutTransferRights() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
         uint256 tokenId = 1;
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
         lpManager.seedFees(tokenId, 3 ether, 5 ether);
@@ -71,7 +71,7 @@ contract PermissionRegistryTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                owner,
+                user,
                 operator,
                 address(lpWrapper),
                 lpWrapper.transferManagedPosition.selector
@@ -81,13 +81,13 @@ contract PermissionRegistryTest is Test {
     }
 
     function testBatchGrantLetsOperatorHandleMultipleLpFunctions() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
 
         IPermissionRegistry.PermissionKey[] memory keys = new IPermissionRegistry.PermissionKey[](2);
-        keys[0] = IPermissionRegistry.PermissionKey(owner, operator, address(lpWrapper), lpWrapper.addLiquidity.selector);
-        keys[1] = IPermissionRegistry.PermissionKey(owner, operator, address(lpWrapper), lpWrapper.claim.selector);
+        keys[0] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.addLiquidity.selector);
+        keys[1] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantBatch(keys);
 
         vm.prank(operator);
@@ -106,9 +106,9 @@ contract PermissionRegistryTest is Test {
     }
 
     function testRevokeTurnsPermissionOff() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.startPrank(owner);
+        vm.startPrank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
         registry.revoke(operator, address(lpWrapper), lpWrapper.claim.selector);
         vm.stopPrank();
@@ -117,7 +117,7 @@ contract PermissionRegistryTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                owner,
+                user,
                 operator,
                 address(lpWrapper),
                 lpWrapper.claim.selector
@@ -127,18 +127,18 @@ contract PermissionRegistryTest is Test {
     }
 
     function testPermissionIsScopedToTarget() public {
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpManager), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpManager), lpWrapper.claim.selector));
     }
 
     function testStakingRewardsCanBeClaimedWithoutUnstakeRights() public {
-        uint256 managedId = _openStakeForOwner();
+        uint256 managedId = _openStakeForUser();
         uint256 positionId = 1;
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(stakingWrapper), stakingWrapper.claimRewards.selector);
 
         stakingManager.seedRewards(positionId, 42 ether);
@@ -151,7 +151,7 @@ contract PermissionRegistryTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                owner,
+                user,
                 operator,
                 address(stakingWrapper),
                 stakingWrapper.unstake.selector
@@ -161,24 +161,24 @@ contract PermissionRegistryTest is Test {
     }
 
     function testTreasuryCanAuthorizeRebalanceWithoutControlTransfer() public {
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(treasury), treasury.rebalance.selector);
 
         vm.prank(operator);
-        treasury.rebalance(owner);
-        assertEq(treasury.rebalances(owner), 1);
+        treasury.rebalance(user);
+        assertEq(treasury.rebalances(user), 1);
 
         vm.prank(operator);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                owner,
+                user,
                 operator,
                 address(treasury),
                 treasury.transferTreasuryControl.selector
             )
         );
-        treasury.transferTreasuryControl(owner, stranger);
+        treasury.transferTreasuryControl(user, stranger);
     }
 
     // -------------------------------------------------------------------------
@@ -186,14 +186,14 @@ contract PermissionRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testGrantWithExpiryWorksBeforeExpiry() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), expiry);
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), expiry);
 
         lpManager.seedFees(1, 1 ether, 2 ether);
         vm.prank(operator);
@@ -203,22 +203,22 @@ contract PermissionRegistryTest is Test {
     }
 
     function testGrantWithExpiryRevertsAfterExpiry() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
 
         vm.warp(block.timestamp + 1 days + 1);
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 1 ether, 2 ether);
         vm.prank(operator);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionExpired.selector,
-                owner,
+                user,
                 operator,
                 address(lpWrapper),
                 lpWrapper.claim.selector
@@ -228,14 +228,14 @@ contract PermissionRegistryTest is Test {
     }
 
     function testGrantPermanentIsUnaffectedByTime() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
         vm.warp(block.timestamp + 365 days * 100);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 7 ether, 3 ether);
         vm.prank(operator);
@@ -248,15 +248,15 @@ contract PermissionRegistryTest is Test {
     // PermissionPermit tests
     // -------------------------------------------------------------------------
 
-    function testPermitPermissionGrantsOnBehalfOfOwner() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+    function testPermitPermissionGrantsOnBehalfOfUser() public {
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
-        uint256 managedId = _openLpPositionAs(ownerAddr);
+        uint256 managedId = _openLpPositionAs(userAddr);
 
         uint256 deadline = block.timestamp + 1 hours;
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -268,7 +268,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -278,13 +278,13 @@ contract PermissionRegistryTest is Test {
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
         bytes memory sig = abi.encodePacked(r, s, v);
 
         registry.permitPermission(permit, sig);
 
-        assertTrue(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionNonce(ownerAddr), 1);
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionNonce(userAddr), 1);
 
         lpManager.seedFees(1, 5 ether, 0);
         vm.prank(operator);
@@ -292,17 +292,17 @@ contract PermissionRegistryTest is Test {
         assertEq(a0, 5 ether);
     }
 
-    function testPermitPermissionRevokeOnBehalfOfOwner() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+    function testPermitPermissionRevokeOnBehalfOfUser() public {
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
-        vm.prank(ownerAddr);
+        vm.prank(userAddr);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
-        assertTrue(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         uint256 deadline = block.timestamp + 1 hours;
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -314,7 +314,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -324,20 +324,20 @@ contract PermissionRegistryTest is Test {
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
 
         registry.permitPermission(permit, abi.encodePacked(r, s, v));
 
-        assertFalse(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testPermitPermissionRejectsWrongSigner() public {
-        uint256 ownerKey = 0xA11CE;
+        uint256 userKey = 0xA11CE;
         uint256 wrongKey = 0xBAD;
-        address ownerAddr = vm.addr(ownerKey);
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -349,7 +349,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -366,12 +366,12 @@ contract PermissionRegistryTest is Test {
     }
 
     function testPermitPermissionRejectsExpiredDeadline() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         uint256 deadline = block.timestamp - 1;
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -383,7 +383,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -393,18 +393,18 @@ contract PermissionRegistryTest is Test {
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
 
         vm.expectRevert(IPermissionRegistry.DeadlineExpired.selector);
         registry.permitPermission(permit, abi.encodePacked(r, s, v));
     }
 
     function testPermitPermissionRejectsReplay() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -416,7 +416,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -426,7 +426,7 @@ contract PermissionRegistryTest is Test {
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
         bytes memory sig = abi.encodePacked(r, s, v);
 
         registry.permitPermission(permit, sig);
@@ -443,28 +443,28 @@ contract PermissionRegistryTest is Test {
         // At exactly the expiry timestamp the permission should still be valid.
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
 
         vm.warp(expiry); // exactly at expiry
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testExpiryIsExpiredOneSecondAfterBoundary() public {
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
 
         vm.warp(expiry + 1);
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testGrantWithExpiryAtCurrentTimestampReverts() public {
         uint48 now_ = uint48(block.timestamp);
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(IPermissionRegistry.InvalidExpiry.selector);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, now_);
     }
@@ -474,10 +474,10 @@ contract PermissionRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testGrantOverwritesExpiryWithPermanent() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.startPrank(owner);
+        vm.startPrank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
         // Overwrite with a permanent grant before it expires.
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
@@ -485,7 +485,7 @@ contract PermissionRegistryTest is Test {
 
         vm.warp(expiry + 1); // past the original expiry
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 1 ether, 0);
         vm.prank(operator);
@@ -493,10 +493,10 @@ contract PermissionRegistryTest is Test {
     }
 
     function testGrantWithExpiryOverwritesPermanentGrant() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
         uint48 expiry = uint48(block.timestamp + 1 days);
 
-        vm.startPrank(owner);
+        vm.startPrank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
         // Downgrade to a time-bounded permission.
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, expiry);
@@ -504,14 +504,14 @@ contract PermissionRegistryTest is Test {
 
         vm.warp(expiry + 1);
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 1 ether, 0);
         vm.prank(operator);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionExpired.selector,
-                owner, operator, address(lpWrapper), lpWrapper.claim.selector
+                user, operator, address(lpWrapper), lpWrapper.claim.selector
             )
         );
         lpWrapper.claim(managedId, recipient);
@@ -521,21 +521,21 @@ contract PermissionRegistryTest is Test {
     // Permission space isolation
     // -------------------------------------------------------------------------
 
-    function testStrangerRevokeCannotTouchOwnerPermission() public {
-        // The owner is the primary key in the permission mapping.
-        // A stranger calling revoke() can only zero out their OWN (stranger → operator) slot.
-        uint256 managedId = _openLpPositionForOwner();
+    function testStrangerRevokeCannotTouchUserPermission() public {
+        // The user is the primary key in the permission mapping.
+        // A stranger calling revoke() can only zero out their OWN (stranger -> operator) slot.
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        // Stranger tries to revoke the owner's grant — this only writes to
+        // Stranger tries to revoke the user's grant — this only writes to
         // permissions[stranger][operator][...] which was never set.
         vm.prank(stranger);
         registry.revoke(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        // Owner's permission is untouched.
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        // User's permission is untouched.
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 1 ether, 0);
         vm.prank(operator);
@@ -543,67 +543,67 @@ contract PermissionRegistryTest is Test {
     }
 
     function testOperatorCannotRevokeTheirOwnIncomingGrant() public {
-        // Operator calls revoke(owner, target, selector) which writes to
-        // permissions[operator][owner][target][selector] — the slot where
-        // operator would be the *owner*, not their incoming permission.
-        uint256 managedId = _openLpPositionForOwner();
+        // Operator calls revoke(user, target, selector) which writes to
+        // permissions[operator][user][target][selector] — the slot where
+        // operator would be the *user*, not their incoming permission.
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
         // Operator tries to self-revoke.
         vm.prank(operator);
-        registry.revoke(owner, address(lpWrapper), lpWrapper.claim.selector);
+        registry.revoke(user, address(lpWrapper), lpWrapper.claim.selector);
 
-        // The grant from owner→operator is still intact.
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        // The grant from user -> operator is still intact.
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 1 ether, 0);
         vm.prank(operator);
         lpWrapper.claim(managedId, recipient);
     }
 
-    function testTwoOwnersGrantingToSameOperatorAreIndependent() public {
-        address ownerB = makeAddr("ownerB");
+    function testTwoUsersGrantingToSameOperatorAreIndependent() public {
+        address userB = makeAddr("userB");
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        vm.prank(ownerB);
+        vm.prank(userB);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        // Owner A revokes — owner B's grant must survive.
-        vm.prank(owner);
+        // User A revokes — user B's grant must survive.
+        vm.prank(user);
         registry.revoke(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertTrue(registry.isAuthorizedCall(ownerB, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(userB, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     // -------------------------------------------------------------------------
     // Batch atomicity
     // -------------------------------------------------------------------------
 
-    function testBatchGrantIsAtomicOnOwnerMismatch() public {
-        address ownerB = makeAddr("ownerB");
+    function testBatchGrantIsAtomicOnUserMismatch() public {
+        address userB = makeAddr("userB");
 
         IPermissionRegistry.PermissionKey[] memory keys = new IPermissionRegistry.PermissionKey[](3);
-        keys[0] = IPermissionRegistry.PermissionKey(owner, operator, address(lpWrapper), lpWrapper.claim.selector);
-        keys[1] = IPermissionRegistry.PermissionKey(ownerB, operator, address(lpWrapper), lpWrapper.addLiquidity.selector); // wrong owner
-        keys[2] = IPermissionRegistry.PermissionKey(owner, operator, address(lpWrapper), lpWrapper.addLiquidity.selector);
+        keys[0] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.claim.selector);
+        keys[1] = IPermissionRegistry.PermissionKey(userB, operator, address(lpWrapper), lpWrapper.addLiquidity.selector); // wrong user
+        keys[2] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.addLiquidity.selector);
 
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                ownerB, owner, address(lpWrapper), lpWrapper.addLiquidity.selector
+                userB, user, address(lpWrapper), lpWrapper.addLiquidity.selector
             )
         );
         registry.grantBatch(keys);
 
         // No partial state — keys[0] must not have been set.
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.addLiquidity.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.addLiquidity.selector));
     }
 
     // -------------------------------------------------------------------------
@@ -611,43 +611,43 @@ contract PermissionRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testGrantRevertsOnZeroOperator() public {
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(IPermissionRegistry.InvalidAddress.selector);
         registry.grant(address(0), address(lpWrapper), lpWrapper.claim.selector);
     }
 
     function testGrantRevertsOnZeroTarget() public {
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(IPermissionRegistry.InvalidAddress.selector);
         registry.grant(operator, address(0), lpWrapper.claim.selector);
     }
 
     function testGrantRevertsOnZeroSelector() public {
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(IPermissionRegistry.InvalidSelector.selector);
         registry.grant(operator, address(lpWrapper), bytes4(0));
     }
 
     function testRevokeNonexistentPermissionDoesNotRevert() public {
         // Revoke on a slot that was never set should silently succeed.
-        vm.prank(owner);
+        vm.prank(user);
         registry.revoke(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
-    function testSelfGrantOwnerAsOperator() public {
-        // An owner granting themselves is unusual but not disallowed.
-        uint256 managedId = _openLpPositionForOwner();
+    function testSelfGrantUserAsOperator() public {
+        // A user granting themselves is unusual but not disallowed.
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.prank(owner);
-        registry.grant(owner, address(lpWrapper), lpWrapper.claim.selector);
+        vm.prank(user);
+        registry.grant(user, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertTrue(registry.isAuthorizedCall(owner, owner, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, user, address(lpWrapper), lpWrapper.claim.selector));
 
         lpManager.seedFees(1, 2 ether, 1 ether);
-        // Owner calling directly still works (short-circuits registry check).
-        vm.prank(owner);
+        // User calling directly still works (short-circuits registry check).
+        vm.prank(user);
         lpWrapper.claim(managedId, recipient);
     }
 
@@ -656,11 +656,11 @@ contract PermissionRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testPermitWithSkippedNonceReverts() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -669,7 +669,7 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        bytes memory sig = _signPermit(ownerKey, permit);
+        bytes memory sig = _signPermit(userKey, permit);
         vm.expectRevert(abi.encodeWithSelector(IPermissionRegistry.InvalidNonce.selector, uint256(0), uint256(5)));
         registry.permitPermission(permit, sig);
     }
@@ -677,11 +677,11 @@ contract PermissionRegistryTest is Test {
     function testPermitDeadlineAtCurrentTimestampIsValid() public {
         // Deadline check is strict: reverts only when block.timestamp > deadline.
         // deadline == block.timestamp should pass.
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -690,17 +690,17 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp // exactly now
         });
 
-        registry.permitPermission(permit, _signPermit(ownerKey, permit));
+        registry.permitPermission(permit, _signPermit(userKey, permit));
 
-        assertTrue(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testPermitGrantedPermissionCanBeRevokedDirectly() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -709,23 +709,23 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        registry.permitPermission(permit, _signPermit(ownerKey, permit));
-        assertTrue(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        registry.permitPermission(permit, _signPermit(userKey, permit));
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
 
-        // Owner revokes the permit-granted permission directly.
-        vm.prank(ownerAddr);
+        // User revokes the permit-granted permission directly.
+        vm.prank(userAddr);
         registry.revoke(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertFalse(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testPermitCanGrantTimeBoundedPermission() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
         uint48 expiry = uint48(block.timestamp + 7 days);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -734,22 +734,22 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        registry.permitPermission(permit, _signPermit(ownerKey, permit));
+        registry.permitPermission(permit, _signPermit(userKey, permit));
 
-        assertEq(registry.permissionExpiry(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector), expiry);
+        assertEq(registry.permissionExpiry(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector), expiry);
 
         vm.warp(expiry + 1);
-        assertFalse(registry.isAuthorizedCall(ownerAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertFalse(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
     }
 
     function testPermitWithAlreadyExpiredExpiryReverts() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         vm.warp(1_000_000);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -758,7 +758,7 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        bytes memory sig = _signPermit(ownerKey, permit);
+        bytes memory sig = _signPermit(userKey, permit);
         vm.expectRevert(IPermissionRegistry.InvalidExpiry.selector);
         registry.permitPermission(permit, sig);
     }
@@ -769,11 +769,11 @@ contract PermissionRegistryTest is Test {
 
     function testHighSSignatureIsRejected() public {
         // A malleable (high-s) twin of a valid signature must be rejected.
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -785,12 +785,12 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner, permit.operator, permit.target,
+                permit.user, permit.operator, permit.target,
                 permit.selector, permit.expiry, permit.nonce, permit.deadline
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(ownerKey, digest);
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
 
         // Compute malleable twin: s' = n - s, v' flipped.
         uint256 secp256k1n = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141;
@@ -804,11 +804,11 @@ contract PermissionRegistryTest is Test {
     function testPermitOperatorMutationInvalidatesSignature() public {
         // Altering any struct field after signing must cause an InvalidSignature revert,
         // proving that all fields are committed in the EIP-712 hash.
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -817,7 +817,7 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        bytes memory sig = _signPermit(ownerKey, permit);
+        bytes memory sig = _signPermit(userKey, permit);
 
         // Swap in a different operator after signing.
         permit.operator = stranger;
@@ -827,11 +827,11 @@ contract PermissionRegistryTest is Test {
     }
 
     function testPermitExpiryMutationInvalidatesSignature() public {
-        uint256 ownerKey = 0xA11CE;
-        address ownerAddr = vm.addr(ownerKey);
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
 
         IPermissionRegistry.PermissionPermit memory permit = IPermissionRegistry.PermissionPermit({
-            owner: ownerAddr,
+            user: userAddr,
             operator: operator,
             target: address(lpWrapper),
             selector: lpWrapper.claim.selector,
@@ -840,7 +840,7 @@ contract PermissionRegistryTest is Test {
             deadline: block.timestamp + 1 hours
         });
 
-        bytes memory sig = _signPermit(ownerKey, permit);
+        bytes memory sig = _signPermit(userKey, permit);
 
         // Inflate the expiry after signing.
         permit.expiry = type(uint48).max;
@@ -854,14 +854,14 @@ contract PermissionRegistryTest is Test {
     // -------------------------------------------------------------------------
 
     function testFullApprovalAuthorizesAllSelectorsOnTarget() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantFull(operator, address(lpWrapper));
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
-        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 4);
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+        assertEq(registry.rawPermissionData(user, operator, address(lpWrapper)).length, 4);
 
         lpManager.seedFees(1, 3 ether, 5 ether);
         vm.prank(operator);
@@ -872,22 +872,22 @@ contract PermissionRegistryTest is Test {
     }
 
     function testRevokeAllClearsFullApproval() public {
-        uint256 managedId = _openLpPositionForOwner();
+        uint256 managedId = _openLpPositionForUser();
 
-        vm.startPrank(owner);
+        vm.startPrank(user);
         registry.grantFull(operator, address(lpWrapper));
         registry.revokeAll(operator, address(lpWrapper));
         vm.stopPrank();
 
-        assertFalse(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 0);
+        assertFalse(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.rawPermissionData(user, operator, address(lpWrapper)).length, 0);
 
         lpManager.seedFees(1, 1 ether, 2 ether);
         vm.prank(operator);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                owner,
+                user,
                 operator,
                 address(lpWrapper),
                 lpWrapper.claim.selector
@@ -897,51 +897,51 @@ contract PermissionRegistryTest is Test {
     }
 
     function testGrantFullWithExpiryAcceptsPermanentSentinel() public {
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantFullWithExpiry(operator, address(lpWrapper), type(uint48).max);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
     }
 
     function testGrantWithExpiryAcceptsPermanentSentinel() public {
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, type(uint48).max);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
     }
 
     function testSelectorGrantDoesNotMutateExistingFullApproval() public {
         uint48 fullExpiry = uint48(block.timestamp + 10 days);
         uint48 shorterSelectorExpiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantFullWithExpiry(operator, address(lpWrapper), fullExpiry);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, shorterSelectorExpiry);
 
-        assertEq(registry.permissionExpiry(owner, operator, address(lpWrapper), lpWrapper.claim.selector), fullExpiry);
-        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 4);
+        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), fullExpiry);
+        assertEq(registry.rawPermissionData(user, operator, address(lpWrapper)).length, 4);
     }
 
     function testSelectorGrantReplacesExpiredFullApproval() public {
         uint48 fullExpiry = uint48(block.timestamp + 1 days);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantFullWithExpiry(operator, address(lpWrapper), fullExpiry);
 
         vm.warp(block.timestamp + 1 days + 1);
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grant(operator, address(lpWrapper), lpWrapper.claim.selector);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
         assertFalse(
-            registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector)
+            registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector)
         );
-        assertEq(registry.rawPermissionData(owner, operator, address(lpWrapper)).length, 8);
+        assertEq(registry.rawPermissionData(user, operator, address(lpWrapper)).length, 8);
     }
 
     function testSelectorBundleRequiresSortedUniqueSelectors() public {
@@ -949,7 +949,7 @@ contract PermissionRegistryTest is Test {
         unsorted[0] = bytes4(uint32(2));
         unsorted[1] = bytes4(uint32(1));
 
-        vm.prank(owner);
+        vm.prank(user);
         vm.expectRevert(IPermissionRegistry.InvalidSelector.selector);
         registry.grantSelectorBundle(operator, address(lpWrapper), unsorted, type(uint48).max);
 
@@ -961,11 +961,11 @@ contract PermissionRegistryTest is Test {
             ? lpWrapper.transferManagedPosition.selector
             : lpWrapper.claim.selector;
 
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantSelectorBundle(operator, address(lpWrapper), sorted, type(uint48).max);
 
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertTrue(registry.isAuthorizedCall(owner, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
     }
 
     // -------------------------------------------------------------------------
@@ -979,7 +979,7 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -993,18 +993,18 @@ contract PermissionRegistryTest is Test {
         return abi.encodePacked(r, s, v);
     }
 
-    function _openLpPositionForOwner() internal returns (uint256 managedId) {
-        vm.prank(owner);
-        (managedId,) = lpWrapper.openManagedPosition(owner, -60, 60, 1_000);
+    function _openLpPositionForUser() internal returns (uint256 managedId) {
+        vm.prank(user);
+        (managedId,) = lpWrapper.openManagedPosition(user, -60, 60, 1_000);
     }
 
-    function _openLpPositionAs(address ownerAddr) internal returns (uint256 managedId) {
-        vm.prank(ownerAddr);
-        (managedId,) = lpWrapper.openManagedPosition(ownerAddr, -60, 60, 1_000);
+    function _openLpPositionAs(address userAddr) internal returns (uint256 managedId) {
+        vm.prank(userAddr);
+        (managedId,) = lpWrapper.openManagedPosition(userAddr, -60, 60, 1_000);
     }
 
-    function _openStakeForOwner() internal returns (uint256 managedId) {
-        vm.prank(owner);
-        (managedId,) = stakingWrapper.openManagedStake(owner, 1_000);
+    function _openStakeForUser() internal returns (uint256 managedId) {
+        vm.prank(user);
+        (managedId,) = stakingWrapper.openManagedStake(user, 1_000);
     }
 }

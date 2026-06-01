@@ -21,11 +21,11 @@ That is awkward for users, hard for wallets to explain, and non-composable for p
 
 ERC Approval Registry gives contracts a shared authorization primitive:
 
-> Owner authorizes operator to call specific functions on a target contract, without transferring custody.
+> User authorizes operator to call specific functions on a target contract, without transferring custody.
 
-The registry stores one authorization record per `(owner, operator, target)`:
+The registry stores one authorization record per `(user, operator, target)`:
 
-- owner — whose position/account/assets are being acted on
+- user — whose position/account/assets are being acted on
 - operator — who is allowed to act
 - target — which contract they may call
 - auth data — either full-target approval or a sorted selector bundle
@@ -36,16 +36,16 @@ The registry supports two modes:
 - **Selector approval** for narrow permissions like `claim()` but not `transfer()`
 - **Full-target approval** for trusted forwarders where the user intentionally delegates the whole target surface
 
-Selectors are not stored as independent mapping keys in the canonical design. Selector grant/revoke APIs are convenience methods that update the compact auth blob for `(owner, operator, target)`.
+Selectors are not stored as independent mapping keys in the canonical design. Selector grant/revoke APIs are convenience methods that update the compact auth blob for `(user, operator, target)`.
 
 ## What integration looks like
 
-An integrating contract only needs to ask the registry before allowing an operator to act for an owner.
+An integrating contract only needs to ask the registry before allowing an operator to act for a user.
 
 ```solidity
-modifier onlyAuthorized(address owner) {
-    if (msg.sender != owner) {
-        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+modifier onlyAuthorized(address user) {
+    if (msg.sender != user) {
+        registry.requireAuthorizedCall(user, msg.sender, address(this), msg.sig);
     }
     _;
 }
@@ -89,7 +89,7 @@ For protocols:
 
 For wallets and agents:
 
-- permissions have a stable shape: owner, operator, target, auth mode, selectors, expiry
+- permissions have a stable shape: user, operator, target, auth mode, selectors, expiry
 - selector-scoped approvals can be rendered more clearly than token allowances
 - revocation and permission discovery can be standardized across apps
 
@@ -141,7 +141,7 @@ The full interface is in [`src/interfaces/IPermissionRegistry.sol`](./src/interf
 ### Write API
 
 ```solidity
-// Add or remove a single selector inside the auth blob for (owner, operator, target).
+// Add or remove a single selector inside the auth blob for (user, operator, target).
 function grant(address operator, address target, bytes4 selector) external;
 function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external;
 function revoke(address operator, address target, bytes4 selector) external;
@@ -151,7 +151,7 @@ function grantFull(address operator, address target) external;
 function grantFullWithExpiry(address operator, address target, uint48 expiry) external;
 function revokeAll(address operator, address target) external;
 
-// Replace the whole selector bundle for (owner, operator, target).
+// Replace the whole selector bundle for (user, operator, target).
 function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external;
 ```
 
@@ -169,20 +169,20 @@ function permitPermission(PermissionPermit calldata permit, bytes calldata signa
 ### Read API
 
 ```solidity
-function isAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view returns (bool);
-function requireAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view;
-function permissionExpiry(address owner, address operator, address target, bytes4 selector) external view returns (uint48);
-function rawPermissionData(address owner, address operator, address target) external view returns (bytes memory);
-function permissionNonce(address owner) external view returns (uint256);
+function isAuthorizedCall(address user, address operator, address target, bytes4 selector) external view returns (bool);
+function requireAuthorizedCall(address user, address operator, address target, bytes4 selector) external view;
+function permissionExpiry(address user, address operator, address target, bytes4 selector) external view returns (uint48);
+function rawPermissionData(address user, address operator, address target) external view returns (bytes memory);
+function permissionNonce(address user) external view returns (uint256);
 ```
 
-Selector grant/revoke calls are convenience methods for narrow incremental updates to the selector bundle stored under `(owner, operator, target)`. `grantSelectorBundle` replaces the whole selector bundle. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
+Selector grant/revoke calls are convenience methods for narrow incremental updates to the selector bundle stored under `(user, operator, target)`. `grantSelectorBundle` replaces the whole selector bundle. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
 
-One important semantic constraint: expiry is bundle-wide for a given `(owner, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
+One important semantic constraint: expiry is bundle-wide for a given `(user, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
 
 ## Implementation notes
 
-The current canonical design stores one compact authorization blob per `(owner, operator, target)`.
+The current canonical design stores one compact authorization blob per `(user, operator, target)`.
 
 The blob can represent:
 

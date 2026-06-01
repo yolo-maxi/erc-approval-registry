@@ -34,7 +34,7 @@ The goal is a small registry primitive that contracts can integrate with one aut
 
 ## Proposed primitive
 
-The registry stores one authorization blob per `(owner, operator, target)`:
+The registry stores one authorization blob per `(user, operator, target)`:
 
 ```text
 auth.length == 0: no approval
@@ -42,14 +42,14 @@ auth.length == 4: expiry only = full-target approval
 auth.length > 4:  uint32 expiry || sorted bytes4 selectors...
 ```
 
-So an owner can grant an operator either full approval on a target until expiry, or approval for a sorted bundle of specific selectors until expiry. Expiry is bundle-wide for each `(owner, operator, target)` — intentionally not per-selector, to keep the blob compact.
+So a user can grant an operator either full approval on a target until expiry, or approval for a sorted bundle of specific selectors until expiry. Expiry is bundle-wide for each `(user, operator, target)` — intentionally not per-selector, to keep the blob compact.
 
 Integration is one modifier:
 
 ```solidity
-modifier onlyAuthorized(address owner) {
-    if (msg.sender != owner) {
-        registry.requireAuthorizedCall(owner, msg.sender, address(this), msg.sig);
+modifier onlyAuthorized(address user) {
+    if (msg.sender != user) {
+        registry.requireAuthorizedCall(user, msg.sender, address(this), msg.sig);
     }
     _;
 }
@@ -59,7 +59,7 @@ The target contract doesn’t care which mode the user picked — it just asks w
 
 ## Why full-target approval is first-class
 
-An earlier draft used a pure selector mapping (`owner → operator → target → selector → expiry`). That gives flat O(1) checks but makes broad delegation expensive — every selector is its own storage slot.
+An earlier draft used a pure selector mapping (`user → operator → target → selector → expiry`). That gives flat O(1) checks but makes broad delegation expensive — every selector is its own storage slot.
 
 For trusted forwarders, broad target-level delegation is the common case. Encoding it as an expiry-only 4-byte blob gives one compact approval, O(1) checks, and gas roughly comparable to an ERC-20 approval. Selector bundles remain available when narrower scope is wanted.
 
@@ -94,7 +94,7 @@ The reference implementation stores expiry compactly as `uint32` (permanent sent
 
 ## EIP-712 permit
 
-A selector-scoped EIP-712 permit lets an owner grant or revoke a single selector without sending a transaction themselves. Permits are intentionally selector-scoped; full-target approvals should require an explicit on-chain call so wallets can warn appropriately.
+A selector-scoped EIP-712 permit lets a user grant or revoke a single selector without sending a transaction themselves. Permits are intentionally selector-scoped; full-target approvals should require an explicit on-chain call so wallets can warn appropriately.
 
 ## Questions for feedback
 

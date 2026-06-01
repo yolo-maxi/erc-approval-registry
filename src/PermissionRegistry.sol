@@ -6,7 +6,7 @@ import {EIP712} from "./utils/EIP712.sol";
 import {ECDSA} from "./utils/ECDSA.sol";
 
 /// @title PermissionRegistry
-/// @notice Registry for permissions scoped to (owner, operator, target) with a compact auth blob.
+/// @notice Registry for permissions scoped to (user, operator, target) with a compact auth blob.
 ///
 /// Storage encoding: bytes auth where
 ///   length 0 = not granted / revoked
@@ -18,12 +18,12 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
     uint32 internal constant STORED_PERMANENT = type(uint32).max;
 
     bytes32 public constant PERMISSION_PERMIT_TYPEHASH = keccak256(
-        "PermissionPermit(address owner,address operator,address target,bytes4 selector,uint48 expiry,uint256 nonce,uint256 deadline)"
+        "PermissionPermit(address user,address operator,address target,bytes4 selector,uint48 expiry,uint256 nonce,uint256 deadline)"
     );
 
-    mapping(address owner => mapping(address operator => mapping(address target => bytes))) internal permissions;
+    mapping(address user => mapping(address operator => mapping(address target => bytes))) internal permissions;
 
-    mapping(address owner => uint256) public permissionNonce;
+    mapping(address user => uint256) public permissionNonce;
 
     constructor() EIP712("PermissionRegistry", "1") {}
 
@@ -70,8 +70,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         uint256 length = keys.length;
         for (uint256 i; i < length; ++i) {
             PermissionKey calldata key = keys[i];
-            if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _grantSelector(key.owner, key.operator, key.target, key.selector, STORED_PERMANENT);
+            if (key.user != msg.sender) revert PermissionDenied(key.user, msg.sender, key.target, key.selector);
+            _grantSelector(key.user, key.operator, key.target, key.selector, STORED_PERMANENT);
         }
     }
 
@@ -80,8 +80,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         for (uint256 i; i < length; ++i) {
             PermissionEntry calldata entry = entries[i];
             PermissionKey calldata key = entry.key;
-            if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _grantSelector(key.owner, key.operator, key.target, key.selector, _normalizeExpiryAllowPermanent(entry.expiry));
+            if (key.user != msg.sender) revert PermissionDenied(key.user, msg.sender, key.target, key.selector);
+            _grantSelector(key.user, key.operator, key.target, key.selector, _normalizeExpiryAllowPermanent(entry.expiry));
         }
     }
 
@@ -89,8 +89,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         uint256 length = keys.length;
         for (uint256 i; i < length; ++i) {
             PermissionKey calldata key = keys[i];
-            if (key.owner != msg.sender) revert PermissionDenied(key.owner, msg.sender, key.target, key.selector);
-            _revokeSelector(key.owner, key.operator, key.target, key.selector);
+            if (key.user != msg.sender) revert PermissionDenied(key.user, msg.sender, key.target, key.selector);
+            _revokeSelector(key.user, key.operator, key.target, key.selector);
         }
     }
 
@@ -102,13 +102,13 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         if (block.timestamp > permit.deadline) revert DeadlineExpired();
         if (permit.expiry != 0) _normalizeExpiryAllowPermanent(permit.expiry);
 
-        uint256 nonce = permissionNonce[permit.owner];
+        uint256 nonce = permissionNonce[permit.user];
         if (permit.nonce != nonce) revert InvalidNonce(nonce, permit.nonce);
 
         bytes32 structHash = keccak256(
             abi.encode(
                 PERMISSION_PERMIT_TYPEHASH,
-                permit.owner,
+                permit.user,
                 permit.operator,
                 permit.target,
                 permit.selector,
@@ -118,13 +118,13 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             )
         );
         address signer = ECDSA.recover(_hashTypedData(structHash), bytes(signature));
-        if (signer != permit.owner) revert InvalidSignature();
+        if (signer != permit.user) revert InvalidSignature();
 
-        permissionNonce[permit.owner] = nonce + 1;
+        permissionNonce[permit.user] = nonce + 1;
         if (permit.expiry == 0) {
-            _revokeSelector(permit.owner, permit.operator, permit.target, permit.selector);
+            _revokeSelector(permit.user, permit.operator, permit.target, permit.selector);
         } else {
-            _grantSelector(permit.owner, permit.operator, permit.target, permit.selector, _normalizeExpiryAllowPermanent(permit.expiry));
+            _grantSelector(permit.user, permit.operator, permit.target, permit.selector, _normalizeExpiryAllowPermanent(permit.expiry));
         }
     }
 
@@ -132,57 +132,57 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
     // Authorization queries
     // -------------------------------------------------------------------------
 
-    function isAuthorizedCall(address owner, address operator, address target, bytes4 selector)
+    function isAuthorizedCall(address user, address operator, address target, bytes4 selector)
         external
         view
         returns (bool)
     {
-        (bool authorized, uint32 expiry,) = _decodeStorageAuthorization(permissions[owner][operator][target], selector);
+        (bool authorized, uint32 expiry,) = _decodeStorageAuthorization(permissions[user][operator][target], selector);
         return authorized && block.timestamp <= expiry;
     }
 
-    function requireAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view {
+    function requireAuthorizedCall(address user, address operator, address target, bytes4 selector) external view {
         (bool authorized, uint32 expiry, bool selectorPresent) =
-            _decodeStorageAuthorization(permissions[owner][operator][target], selector);
-        if (!selectorPresent) revert PermissionDenied(owner, operator, target, selector);
-        if (!authorized || block.timestamp > expiry) revert PermissionExpired(owner, operator, target, selector);
+            _decodeStorageAuthorization(permissions[user][operator][target], selector);
+        if (!selectorPresent) revert PermissionDenied(user, operator, target, selector);
+        if (!authorized || block.timestamp > expiry) revert PermissionExpired(user, operator, target, selector);
     }
 
-    function permissionExpiry(address owner, address operator, address target, bytes4 selector)
+    function permissionExpiry(address user, address operator, address target, bytes4 selector)
         external
         view
         returns (uint48)
     {
-        (bool selectorPresent, uint32 expiry,) = _decodeStorageAuthorization(permissions[owner][operator][target], selector);
+        (bool selectorPresent, uint32 expiry,) = _decodeStorageAuthorization(permissions[user][operator][target], selector);
         if (!selectorPresent) return 0;
         return _externalExpiry(expiry);
     }
 
-    function rawPermissionData(address owner, address operator, address target) external view returns (bytes memory) {
-        return permissions[owner][operator][target];
+    function rawPermissionData(address user, address operator, address target) external view returns (bytes memory) {
+        return permissions[user][operator][target];
     }
 
     // -------------------------------------------------------------------------
     // Internal
     // -------------------------------------------------------------------------
 
-    function _setFull(address owner, address operator, address target, uint32 expiry) internal {
-        _validateBase(owner, operator, target);
-        permissions[owner][operator][target] = abi.encodePacked(expiry);
-        emit PermissionSet(owner, operator, target, bytes4(0), true, _externalExpiry(expiry));
+    function _setFull(address user, address operator, address target, uint32 expiry) internal {
+        _validateBase(user, operator, target);
+        permissions[user][operator][target] = abi.encodePacked(expiry);
+        emit PermissionSet(user, operator, target, bytes4(0), true, _externalExpiry(expiry));
     }
 
     function _setSelectorBundle(
-        address owner,
+        address user,
         address operator,
         address target,
         bytes4[] calldata selectors,
         uint32 expiry
     ) internal {
-        _validateBase(owner, operator, target);
+        _validateBase(user, operator, target);
         uint256 length = selectors.length;
         if (length == 0) {
-            _setFull(owner, operator, target, expiry);
+            _setFull(user, operator, target, expiry);
             return;
         }
 
@@ -194,19 +194,19 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             if (selector == bytes4(0) || selector <= previous) revert InvalidSelector();
             _writeSelector(auth, i, selector);
             previous = selector;
-            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            emit PermissionSet(user, operator, target, selector, true, _externalExpiry(expiry));
         }
-        permissions[owner][operator][target] = auth;
+        permissions[user][operator][target] = auth;
     }
 
-    function _grantSelector(address owner, address operator, address target, bytes4 selector, uint32 expiry) internal {
-        _validate(owner, operator, target, selector);
+    function _grantSelector(address user, address operator, address target, bytes4 selector, uint32 expiry) internal {
+        _validate(user, operator, target, selector);
 
-        bytes memory auth = permissions[owner][operator][target];
+        bytes memory auth = permissions[user][operator][target];
         if (auth.length == 4) {
             uint32 fullExpiry = _readExpiry(auth);
             if (fullExpiry != 0 && block.timestamp <= fullExpiry) {
-                emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(fullExpiry));
+                emit PermissionSet(user, operator, target, selector, true, _externalExpiry(fullExpiry));
                 return;
             }
         }
@@ -215,8 +215,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             bytes memory fresh = new bytes(8);
             _writeExpiry(fresh, expiry);
             _writeSelector(fresh, 0, selector);
-            permissions[owner][operator][target] = fresh;
-            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            permissions[user][operator][target] = fresh;
+            emit PermissionSet(user, operator, target, selector, true, _externalExpiry(expiry));
             return;
         }
 
@@ -237,8 +237,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
 
         if (found) {
             _writeExpiry(auth, expiry);
-            permissions[owner][operator][target] = auth;
-            emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+            permissions[user][operator][target] = auth;
+            emit PermissionSet(user, operator, target, selector, true, _externalExpiry(expiry));
             return;
         }
 
@@ -251,15 +251,15 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             else value = _readSelector(auth, i - 1);
             _writeSelector(updated, i, value);
         }
-        permissions[owner][operator][target] = updated;
-        emit PermissionSet(owner, operator, target, selector, true, _externalExpiry(expiry));
+        permissions[user][operator][target] = updated;
+        emit PermissionSet(user, operator, target, selector, true, _externalExpiry(expiry));
     }
 
-    function _revokeSelector(address owner, address operator, address target, bytes4 selector) internal {
-        _validate(owner, operator, target, selector);
-        bytes memory auth = permissions[owner][operator][target];
+    function _revokeSelector(address user, address operator, address target, bytes4 selector) internal {
+        _validate(user, operator, target, selector);
+        bytes memory auth = permissions[user][operator][target];
         if (auth.length == 0 || auth.length == 4) {
-            emit PermissionSet(owner, operator, target, selector, false, 0);
+            emit PermissionSet(user, operator, target, selector, false, 0);
             return;
         }
 
@@ -272,12 +272,12 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             }
         }
         if (removeAt == selectorCount) {
-            emit PermissionSet(owner, operator, target, selector, false, 0);
+            emit PermissionSet(user, operator, target, selector, false, 0);
             return;
         }
         if (selectorCount == 1) {
-            delete permissions[owner][operator][target];
-            emit PermissionSet(owner, operator, target, selector, false, 0);
+            delete permissions[user][operator][target];
+            emit PermissionSet(user, operator, target, selector, false, 0);
             return;
         }
 
@@ -287,8 +287,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             bytes4 value = _readSelector(auth, i < removeAt ? i : i + 1);
             _writeSelector(updated, i, value);
         }
-        permissions[owner][operator][target] = updated;
-        emit PermissionSet(owner, operator, target, selector, false, 0);
+        permissions[user][operator][target] = updated;
+        emit PermissionSet(user, operator, target, selector, false, 0);
     }
 
     function _decodeStorageAuthorization(bytes storage auth, bytes4 selector)
@@ -331,13 +331,13 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         return (false, expiry, false);
     }
 
-    function _validate(address owner, address operator, address target, bytes4 selector) internal pure {
-        _validateBase(owner, operator, target);
+    function _validate(address user, address operator, address target, bytes4 selector) internal pure {
+        _validateBase(user, operator, target);
         if (selector == bytes4(0)) revert InvalidSelector();
     }
 
-    function _validateBase(address owner, address operator, address target) internal pure {
-        if (owner == address(0) || operator == address(0) || target == address(0)) revert InvalidAddress();
+    function _validateBase(address user, address operator, address target) internal pure {
+        if (user == address(0) || operator == address(0) || target == address(0)) revert InvalidAddress();
     }
 
     function _normalizeExpiry(uint48 expiry) internal view returns (uint32) {

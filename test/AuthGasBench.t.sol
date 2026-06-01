@@ -9,7 +9,7 @@ contract AuthGasBench is Test {
     event GasUsed(string name, uint256 n, uint256 gasUsed);
 
     PermissionRegistry internal registry;
-    address internal owner = address(0xA11CE);
+    address internal user = address(0xA11CE);
     address internal operator = address(0xB0B);
     address internal target = address(0xCAFE);
 
@@ -18,17 +18,17 @@ contract AuthGasBench is Test {
     }
 
     function testGasGrantFullFresh() public {
-        vm.prank(owner);
+        vm.prank(user);
         uint256 start = gasleft();
         registry.grantFull(operator, target);
         emit GasUsed("grantFullFresh", 0, start - gasleft());
     }
 
     function testGasCheckFull() public {
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantFull(operator, target);
         uint256 start = gasleft();
-        bool ok = registry.isAuthorizedCall(owner, operator, target, bytes4(uint32(1)));
+        bool ok = registry.isAuthorizedCall(user, operator, target, bytes4(uint32(1)));
         emit GasUsed("checkFull", 0, start - gasleft());
         assertTrue(ok);
     }
@@ -71,7 +71,7 @@ contract AuthGasBench is Test {
 
     function _benchGrantBundle(uint256 n) internal {
         bytes4[] memory selectors = _selectors(n);
-        vm.prank(owner);
+        vm.prank(user);
         uint256 start = gasleft();
         registry.grantSelectorBundle(operator, target, selectors, type(uint48).max);
         emit GasUsed("grantBundleFresh", n, start - gasleft());
@@ -79,17 +79,17 @@ contract AuthGasBench is Test {
 
     function _benchCheckBundle(uint256 n) internal {
         bytes4[] memory selectors = _selectors(n);
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantSelectorBundle(operator, target, selectors, type(uint48).max);
         uint256 start = gasleft();
-        bool ok = registry.isAuthorizedCall(owner, operator, target, selectors[n - 1]);
+        bool ok = registry.isAuthorizedCall(user, operator, target, selectors[n - 1]);
         emit GasUsed("checkBundleWorst", n, start - gasleft());
         assertTrue(ok);
     }
 
     function _benchGrantBatch(uint256 n) internal {
         IPermissionRegistry.PermissionKey[] memory keys = _keys(n);
-        vm.prank(owner);
+        vm.prank(user);
         uint256 start = gasleft();
         registry.grantBatch(keys);
         emit GasUsed("grantBatchFresh", n, start - gasleft());
@@ -97,11 +97,11 @@ contract AuthGasBench is Test {
 
     function _benchCheckBatch(uint256 n) internal {
         IPermissionRegistry.PermissionKey[] memory keys = _keys(n);
-        vm.prank(owner);
+        vm.prank(user);
         registry.grantBatch(keys);
         bytes4 selector = keys[n - 1].selector;
         uint256 start = gasleft();
-        bool ok = registry.isAuthorizedCall(owner, operator, target, selector);
+        bool ok = registry.isAuthorizedCall(user, operator, target, selector);
         emit GasUsed("checkBatchWorst", n, start - gasleft());
         assertTrue(ok);
     }
@@ -110,7 +110,7 @@ contract AuthGasBench is Test {
         keys = new IPermissionRegistry.PermissionKey[](n);
         bytes4[] memory selectors = _selectors(n);
         for (uint256 i; i < n; ++i) {
-            keys[i] = IPermissionRegistry.PermissionKey(owner, operator, target, selectors[i]);
+            keys[i] = IPermissionRegistry.PermissionKey(user, operator, target, selectors[i]);
         }
     }
 

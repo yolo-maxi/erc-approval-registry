@@ -7,7 +7,7 @@ interface IPermissionRegistry {
     // -------------------------------------------------------------------------
 
     struct PermissionKey {
-        address owner;
+        address user;
         address operator;
         address target;
         bytes4 selector;
@@ -23,7 +23,7 @@ interface IPermissionRegistry {
     /// @dev expiry semantics: 0 = revoke, type(uint48).max = permanent, else = expiry timestamp.
     ///      Validated: if expiry != 0, expiry must be in the future and storage-representable.
     struct PermissionPermit {
-        address owner;
+        address user;
         address operator;
         address target;
         bytes4 selector;
@@ -36,9 +36,9 @@ interface IPermissionRegistry {
     // Errors
     // -------------------------------------------------------------------------
 
-    error PermissionDenied(address owner, address operator, address target, bytes4 selector);
+    error PermissionDenied(address user, address operator, address target, bytes4 selector);
     /// @notice Thrown by requireAuthorizedCall when a permission existed but has passed its expiry.
-    error PermissionExpired(address owner, address operator, address target, bytes4 selector);
+    error PermissionExpired(address user, address operator, address target, bytes4 selector);
     error InvalidAddress();
     error InvalidSelector();
     /// @notice Thrown when a granted expiry is zero or already in the past.
@@ -54,7 +54,7 @@ interface IPermissionRegistry {
     /// @notice Emitted on every permission change.
     /// @param expiry type(uint48).max = permanent; 0 = revoked; else = expiry timestamp.
     event PermissionSet(
-        address indexed owner,
+        address indexed user,
         address indexed operator,
         address indexed target,
         bytes4 selector,
@@ -86,10 +86,10 @@ interface IPermissionRegistry {
     /// @notice Replace the selector bundle for operator on target. Selectors must be sorted and unique.
     function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external;
 
-    /// @notice Batch-grant permanent selector-scoped permissions. All keys must have owner == msg.sender.
+    /// @notice Batch-grant permanent selector-scoped permissions. All keys must have user == msg.sender.
     function grantBatch(PermissionKey[] calldata keys) external;
 
-    /// @notice Batch-grant time-bounded selector-scoped permissions. All keys must have owner == msg.sender.
+    /// @notice Batch-grant time-bounded selector-scoped permissions. All keys must have user == msg.sender.
     function grantBatchWithExpiry(PermissionEntry[] calldata entries) external;
 
     function revokeBatch(PermissionKey[] calldata keys) external;
@@ -98,32 +98,32 @@ interface IPermissionRegistry {
     // Signed permit
     // -------------------------------------------------------------------------
 
-    /// @notice Gasless selector permission grant/revoke: owner signs off-chain, anyone submits on-chain.
+    /// @notice Gasless selector permission grant/revoke: user signs off-chain, anyone submits on-chain.
     function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external;
 
     // -------------------------------------------------------------------------
     // Authorization queries
     // -------------------------------------------------------------------------
 
-    function isAuthorizedCall(address owner, address operator, address target, bytes4 selector)
+    function isAuthorizedCall(address user, address operator, address target, bytes4 selector)
         external
         view
         returns (bool);
 
-    function requireAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view;
+    function requireAuthorizedCall(address user, address operator, address target, bytes4 selector) external view;
 
     /// @notice Returns the effective expiry for selector: 0 = not granted, type(uint48).max = permanent.
-    function permissionExpiry(address owner, address operator, address target, bytes4 selector)
+    function permissionExpiry(address user, address operator, address target, bytes4 selector)
         external
         view
         returns (uint48);
 
     /// @notice Returns raw auth bytes for wallet/indexer inspection.
-    function rawPermissionData(address owner, address operator, address target) external view returns (bytes memory);
+    function rawPermissionData(address user, address operator, address target) external view returns (bytes memory);
 
     // -------------------------------------------------------------------------
     // Nonce
     // -------------------------------------------------------------------------
 
-    function permissionNonce(address owner) external view returns (uint256);
+    function permissionNonce(address user) external view returns (uint256);
 }
