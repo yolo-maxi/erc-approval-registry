@@ -27,7 +27,7 @@ DeFi protocols increasingly want to support automation, social trading, and inte
 
 What is missing is a standard delegated-authorization primitive: one that any contract can integrate with a single line of code, that wallets can index and display uniformly, and that covers common delegation patterns — automation, forwarders, compounding bots, social copying — without requiring custody transfer. This ERC defines that primitive with two useful modes: cheap full-target approval for trusted forwarders, and selector-bundle approval for narrower delegation.
 
-Human-readable signing is an important complementary concern, but it does not need to be solved entirely inside the primitive itself. A registry with a small, stable payload shape — `(owner, operator, target, selectors, expiry)` — is straightforward for wallets to render directly, while richer descriptions of delegated actions can be layered on through verified ABI metadata or descriptor standards such as ERC-7730. Wallets SHOULD clearly distinguish full-target approvals from selector-scoped approvals.
+Human-readable signing is an important complementary concern, but it does not need to be solved entirely inside the primitive itself. A registry with a small, stable payload shape — `(owner, operator, target, auth mode, selectors, expiry)` — is straightforward for wallets to render directly, while richer descriptions of delegated actions can be layered on through verified ABI metadata or descriptor standards such as ERC-7730. Wallets SHOULD clearly distinguish full-target approvals from selector-scoped approvals.
 
 ## Specification
 
@@ -192,7 +192,7 @@ For each key: MUST revert with `PermissionDenied` if `key.owner != msg.sender`. 
 
 MUST return `true` if and only if the authorization blob for `(owner, operator, target)` authorizes `selector` and the stored expiry is nonzero and not expired. MUST NOT revert.
 
-For expiry-only blobs, any nonzero `selector` MUST be considered authorized while the expiry is valid. For selector-bundle blobs, only selectors present in the bundle MUST be considered authorized.
+For expiry-only blobs, any `selector` MUST be considered authorized while the expiry is valid. For selector-bundle blobs, only selectors present in the bundle MUST be considered authorized. The `InvalidSelector` restriction applies to selector-scoped grants, not to full-target authorization queries.
 
 **`requireAuthorizedCall(address owner, address operator, address target, bytes4 selector)`**
 
@@ -338,7 +338,7 @@ Using `bytes4 selector` instead of a human-readable function string prioritizes 
 
 ### Wallet rendering and clear signing
 
-This standard is intentionally compatible with wallet-side clear-signing systems, but does not depend on them for correctness. The registry's own authorization flows are designed to be easy for wallets to render because they expose a compact, explicit set of fields: `owner`, `operator`, `target`, `selector`, and `expiry`.
+This standard is intentionally compatible with wallet-side clear-signing systems, but does not depend on them for correctness. The registry's own authorization flows are designed to be easy for wallets to render because they expose a compact, explicit set of fields: `owner`, `operator`, `target`, `auth mode`, `selectors`, and `expiry`.
 
 If a wallet recognizes the registry contract and its ABI or descriptor metadata, it can already present a correct high-level statement such as "Allow `operator` to call selector `0x12345678` on `target` until `expiry`". If the delegated target contract also has verified ABI metadata or a richer descriptor format such as ERC-7730, the wallet MAY further resolve `selector` into a human-readable function label or intent, such as `claim()` or `Claim rewards`.
 

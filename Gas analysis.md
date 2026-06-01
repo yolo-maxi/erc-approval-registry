@@ -1,10 +1,10 @@
 # Gas analysis
 
-This note compares the current selector-mapping design against the packed-auth-bytes variation.
+This note compares the old selector-mapping baseline against the current packed-auth-bytes design.
 
 ## Designs compared
 
-### Current design: selector mapping
+### Old baseline: selector mapping
 
 Storage shape:
 
@@ -25,7 +25,7 @@ Hot-path check:
 - Check expiry.
 - Constant-time / O(1), regardless of how many selectors were approved.
 
-### Packed-auth-bytes variation
+### Current design: packed auth bytes
 
 Storage shape:
 
@@ -64,7 +64,7 @@ Foundry gas tests were added in `test/AuthGasBench.t.sol` on the packed branch, 
 Commands used:
 
 ```bash
-# Current selector-mapping baseline
+# Old selector-mapping baseline
 cd /tmp/erc-permissions-master
 /home/xiko/.foundry/bin/forge test --match-contract AuthGasBench --fork-url https://ethereum-rpc.publicnode.com -vvvv
 /home/xiko/.foundry/bin/forge test --match-contract AuthGasBench --fork-url https://base-rpc.publicnode.com -vvvv
@@ -96,14 +96,14 @@ Execution gas:
 
 Comparison anchor:
 
-- Current registry single-selector grant: about 35.3k gas
+- Old selector-mapping registry single-selector grant: about 35.3k gas
 - Packed full-target grant: about 35.8k gas
 
 Conclusion:
 
 A full-target approval in the packed model is very close to ERC20 approval territory. It is slightly more expensive than a minimal ERC20 approval, but the same order of magnitude.
 
-## Results: current selector-mapping design
+## Results: old selector-mapping baseline
 
 Approval costs, fresh storage:
 
@@ -124,7 +124,7 @@ Check costs:
 
 Interpretation:
 
-The current model is excellent for hot-path execution. It is constant-time and predictable. The tradeoff is that approvals scale linearly with the number of selectors because each selector writes a separate storage slot.
+The old mapping model is excellent for hot-path execution. It is constant-time and predictable. The tradeoff is that approvals scale linearly with the number of selectors because each selector writes a separate storage slot.
 
 ## Results: packed-auth-bytes design
 
@@ -157,15 +157,15 @@ Worst-case selector-bundle check, selector last in the bundle:
 
 Interpretation:
 
-The full-target path is the important result for forwarders. It has approximately ERC20-approval-like grant cost, and the check remains O(1). The check is about 535 gas more than the current selector-mapping check in the tested implementation, which is very small in absolute terms.
+The full-target path is the important result for forwarders. It has approximately ERC20-approval-like grant cost, and the check remains O(1). The check is about 535 gas more than the old selector-mapping check in the tested implementation, which is very small in absolute terms.
 
-Selector bundles are much cheaper to approve than the current selector-mapping batch once more than one selector is involved. However, selector-bundle checks are O(n), and their cost depends on the number of selectors scanned.
+Selector bundles are much cheaper to approve than the old selector-mapping batch once more than one selector is involved. However, selector-bundle checks are O(n), and their cost depends on the number of selectors scanned.
 
 ## Direct comparison
 
 ### Approval cost
 
-For selector bundles, compared to the current selector-mapping batch:
+For selector bundles, compared to the old selector-mapping batch:
 
 - 1 selector: packed bundle is about 5.4k gas more expensive
 - 2 selectors: packed bundle saves about 17.4k gas
@@ -180,13 +180,13 @@ So for approval transactions, the packed selector bundle starts winning at 2 sel
 
 For full-target approvals:
 
-- Current design has no equivalent full-target primitive.
-- The closest current equivalent would be approving every selector individually, which becomes expensive quickly.
+- The old selector-mapping design had no equivalent full-target primitive.
+- The closest old equivalent would be approving every selector individually, which becomes expensive quickly.
 - Packed full-target approval costs about the same as one normal selector grant.
 
 ### Check cost
 
-Current selector mapping:
+Old selector mapping:
 
 - About 2.1k gas.
 - Constant-time.
@@ -196,7 +196,7 @@ Packed full-target approval:
 
 - About 2.63k gas.
 - Constant-time.
-- About 535 gas more expensive than current selector mapping.
+- About 535 gas more expensive than the old selector mapping.
 - Still extremely low and likely acceptable for forwarder paths.
 
 Packed selector bundle:
@@ -204,11 +204,11 @@ Packed selector bundle:
 - O(n) in the number of selectors scanned.
 - Worst-case check at 20 selectors was about 8.5k gas.
 - Worst-case check at 40 selectors was about 13.6k gas.
-- Still not huge in absolute terms, but meaningfully more than the current O(1) mapping check.
+- Still not huge in absolute terms, but meaningfully more than the old O(1) selector-mapping check.
 
 ## Tradeoffs
 
-### Current selector-mapping design
+### Old selector-mapping baseline
 
 Strengths:
 
@@ -247,7 +247,7 @@ Weaknesses:
 - Hot partial permissions become more expensive as bundle size grows.
 - The implementation is more subtle than a simple nested mapping.
 - Expiry is bundle-wide, not per selector; different expiries for different selectors under the same `(owner, operator, target)` are intentionally not supported.
-- Uses `uint32` expiry internally, which is fine until February 2106 but shorter than the current `uint48` timestamp range.
+- Uses `uint32` expiry internally, which is fine until February 2106 but shorter than the external `uint48` timestamp range.
 
 Best fit:
 
@@ -269,8 +269,8 @@ The forwarder case is the strongest argument:
 
 Selector bundles should be treated as the narrower, more explicit alternative:
 
-- They are cheaper to grant than current batch approvals.
-- They are more expensive to check than current selector mapping.
+- They are cheaper to grant than old mapping-style batch approvals.
+- They are more expensive to check than the old selector mapping.
 - The costs remain low in absolute terms for reasonable bundle sizes.
 
 A clean way to frame the packed design is:

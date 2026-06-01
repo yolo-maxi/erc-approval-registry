@@ -23,18 +23,20 @@ ERC Approval Registry gives contracts a shared authorization primitive:
 
 > Owner authorizes operator to call specific functions on a target contract, without transferring custody.
 
-A permission is scoped by:
+The registry stores one authorization record per `(owner, operator, target)`:
 
 - owner — whose position/account/assets are being acted on
 - operator — who is allowed to act
 - target — which contract they may call
-- selector — which function they may call, unless the owner grants full-target approval
-- expiry — when the permission stops working
+- auth data — either full-target approval or a sorted selector bundle
+- expiry — bundle-wide expiry for that authorization record
 
 The registry supports two modes:
 
 - **Selector approval** for narrow permissions like `claim()` but not `transfer()`
 - **Full-target approval** for trusted forwarders where the user intentionally delegates the whole target surface
+
+Selectors are not stored as independent mapping keys in the canonical design. Selector grant/revoke APIs are convenience methods that update the compact auth blob for `(owner, operator, target)`.
 
 ## What integration looks like
 
@@ -87,7 +89,7 @@ For protocols:
 
 For wallets and agents:
 
-- permissions have a stable shape: owner, operator, target, selectors, expiry
+- permissions have a stable shape: owner, operator, target, auth mode, selectors, expiry
 - selector-scoped approvals can be rendered more clearly than token allowances
 - revocation and permission discovery can be standardized across apps
 
@@ -132,23 +134,49 @@ For wallets and agents:
 - `test/PermissionRegistry.t.sol`
 - `test/AuthGasBench.t.sol`
 
-## Grant types
+## Interface shape
 
-The public interface includes:
+The full interface is in [`src/interfaces/IPermissionRegistry.sol`](./src/interfaces/IPermissionRegistry.sol). At a high level it has four groups:
+
+### Write API
 
 ```solidity
+// Add or remove a single selector inside the auth blob for (owner, operator, target).
 function grant(address operator, address target, bytes4 selector) external;
 function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external;
 function revoke(address operator, address target, bytes4 selector) external;
 
+// Replace the whole auth blob with full-target approval, or clear it.
 function grantFull(address operator, address target) external;
 function grantFullWithExpiry(address operator, address target, uint48 expiry) external;
 function revokeAll(address operator, address target) external;
 
+// Replace the whole selector bundle for (owner, operator, target).
 function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external;
 ```
 
-Use selector grants when the operator should only do specific actions. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
+Use `type(uint48).max` as the expiry for permanent `grantWithExpiry`, `grantFullWithExpiry`, or `grantSelectorBundle` calls.
+
+### Batch and permit API
+
+```solidity
+function grantBatch(PermissionKey[] calldata keys) external;
+function grantBatchWithExpiry(PermissionEntry[] calldata entries) external;
+function revokeBatch(PermissionKey[] calldata keys) external;
+function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external;
+```
+
+### Read API
+
+```solidity
+function isAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view returns (bool);
+function requireAuthorizedCall(address owner, address operator, address target, bytes4 selector) external view;
+function permissionExpiry(address owner, address operator, address target, bytes4 selector) external view returns (uint48);
+function rawPermissionData(address owner, address operator, address target) external view returns (bytes memory);
+function permissionNonce(address owner) external view returns (uint256);
+```
+
+Selector grant/revoke calls are convenience methods for narrow incremental updates to the selector bundle stored under `(owner, operator, target)`. `grantSelectorBundle` replaces the whole selector bundle. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
 
 One important semantic constraint: expiry is bundle-wide for a given `(owner, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
 
@@ -189,6 +217,8 @@ Short version:
 - Full-target checks are O(1) and measured around 2.6k gas in the reference implementation.
 - Selector bundles are much cheaper to approve than writing one storage slot per selector.
 - Selector-bundle checks are O(n), so large bundles are not ideal for very hot partial-permission paths.
+
+In practice, partial delegation tends to be a "a few selectors or all of them" decision — a claim bot wants one or two selectors, a forwarder wants the whole target. Bundles in the 2–5 range are the expected shape, and at that size the O(n) scan stays well under 5k gas.
 
 The intended tradeoff:
 
