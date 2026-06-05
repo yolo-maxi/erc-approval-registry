@@ -164,6 +164,7 @@ function grantBatch(PermissionKey[] calldata keys) external;
 function grantBatchWithExpiry(PermissionEntry[] calldata entries) external;
 function revokeBatch(PermissionKey[] calldata keys) external;
 function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external;
+function permitFullAuthorization(FullAuthorizationPermit calldata permit, bytes calldata signature) external;
 ```
 
 ### Read API
@@ -176,7 +177,7 @@ function rawPermissionData(address user, address operator, address target) exter
 function permissionNonce(address user) external view returns (uint256);
 ```
 
-Selector grant/revoke calls are convenience methods for narrow incremental updates to the selector bundle stored under `(user, operator, target)`. `grantSelectorBundle` replaces the whole selector bundle. Use full-target grants when the operator is a trusted forwarder or module that intentionally needs the whole target surface.
+Selector grant/revoke calls are convenience methods for narrow incremental updates to the selector bundle stored under `(user, operator, target)`. `grantSelectorBundle` replaces the whole selector bundle. Use full-target grants or `permitFullAuthorization` when the operator is a trusted forwarder or module that intentionally needs the whole target surface. The full-target permit has its own EIP-712 typed-data shape so wallets can render it with stronger warnings than selector-scoped permits.
 
 One important semantic constraint: expiry is bundle-wide for a given `(user, operator, target)`. If you need different expiries for different actions, use separate operators/targets or update the bundle intentionally.
 
@@ -189,6 +190,8 @@ The blob can represent:
 - no approval
 - full-target approval
 - selector-bundle approval
+
+`AuthorizationSet(user, operator, target, expiry, selectors)` emits the decoded full authorization state when the whole blob is replaced. Empty `selectors` plus nonzero `expiry` means full-target approval; empty `selectors` plus zero expiry means revoked/no authorization.
 
 Canonical encoding:
 

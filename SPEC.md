@@ -73,6 +73,15 @@ interface IPermissionRegistry {
         uint256 deadline;
     }
 
+    struct FullAuthorizationPermit {
+        address user;
+        address operator;
+        address target;
+        uint48 expiry;
+        uint256 nonce;
+        uint256 deadline;
+    }
+
     error PermissionDenied(address user, address operator, address target, bytes4 selector);
     error PermissionExpired(address user, address operator, address target, bytes4 selector);
     error InvalidAddress();
@@ -91,6 +100,14 @@ interface IPermissionRegistry {
         uint48 expiry
     );
 
+    event AuthorizationSet(
+        address indexed user,
+        address indexed operator,
+        address indexed target,
+        uint48 expiry,
+        bytes4[] selectors
+    );
+
     function grant(address operator, address target, bytes4 selector) external;
     function grantWithExpiry(address operator, address target, bytes4 selector, uint48 expiry) external;
     function revoke(address operator, address target, bytes4 selector) external;
@@ -106,6 +123,7 @@ interface IPermissionRegistry {
     function revokeBatch(PermissionKey[] calldata keys) external;
 
     function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external;
+    function permitFullAuthorization(FullAuthorizationPermit calldata permit, bytes calldata signature) external;
 
     function isAuthorizedCall(address user, address operator, address target, bytes4 selector)
         external view returns (bool);
@@ -206,11 +224,11 @@ MUST return the externally-visible expiry for `selector` under `(user, operator,
 
 MUST return the raw authorization blob for `(user, operator, target)`. This function exists for indexers, wallets, and offchain tooling that want to inspect whether an approval is full-target or selector-bundled without testing individual selectors.
 
-### The PermissionSet Event
+### Events
 
-A `PermissionSet` event MUST be emitted on every call to `grant`, `grantWithExpiry`, `grantFull`, `grantFullWithExpiry`, `grantSelectorBundle`, `revoke`, `revokeAll`, `grantBatch`, `grantBatchWithExpiry`, `revokeBatch`, and `permitPermission` that modifies state. The `approved` field MUST be `true` if the resulting expiry is nonzero, and `false` if it is `0`. The `expiry` field MUST reflect the externally-visible expiry.
+A `PermissionSet` event MUST be emitted on every selector-level change made by `grant`, `grantWithExpiry`, `revoke`, `grantBatch`, `grantBatchWithExpiry`, `revokeBatch`, and `permitPermission`. The `approved` field MUST be `true` if the resulting expiry is nonzero, and `false` if it is `0`. The `expiry` field MUST reflect the externally-visible expiry. For full-target approvals and full revocations, implementations MUST emit `PermissionSet` with `selector == bytes4(0)`.
 
-For full-target approvals and full revocations, implementations MUST emit `PermissionSet` with `selector == bytes4(0)`. Indexers SHOULD interpret this as an update to the whole `(user, operator, target)` authorization. Selector-specific events remain selector-scoped. Indexers MAY reconstruct active permissions from events, but SHOULD query `rawPermissionData` when they need the exact current full-target versus selector-bundle representation.
+Implementations SHOULD also emit `AuthorizationSet` when the full authorization blob for `(user, operator, target)` is replaced, including `grantFull`, `grantFullWithExpiry`, `revokeAll`, `grantSelectorBundle`, and `permitFullAuthorization`. `AuthorizationSet` carries decoded state for indexers and wallets: `expiry` plus the active `selectors` array. An empty `selectors` array with nonzero `expiry` means full-target authorization; an empty array with `expiry == 0` means no authorization. Indexers SHOULD prefer `AuthorizationSet` for full-state reconstruction instead of decoding packed bytes differently in every implementation.
 
 ### Gasless Permit
 
@@ -255,7 +273,7 @@ keccak256(abi.encode(
 ))
 ```
 
-A `PermissionPermit` signature authorizes a specific selector-scoped change in a specific registry contract on a specific chain. It does not create full-target approval; full-target approvals SHOULD use an explicit full-approval signing flow if implemented.
+A `PermissionPermit` signature authorizes a specific selector-scoped change in a specific registry contract on a specific chain. It does not create full-target approval; full-target approvals use the explicit `FullAuthorizationPermit` typed-data flow below so wallets can render stronger warnings for broad authorization.
 
 In human terms, the signed message says:
 
@@ -301,9 +319,33 @@ The `expiry` field in `PermissionPermit` follows the same external encoding as a
 
 The `signature` MUST be a 65-byte `secp256k1` signature in the format `r ++ s ++ v`. High-s signatures MUST be rejected.
 
+**`permitFullAuthorization(FullAuthorizationPermit calldata permit, bytes calldata signature)`**
+
+Allows a user to grant or revoke full-target authorization by submitting an EIP-712 signed message. This is a first-class permit path because full-target approval is the common case for trusted forwarders and agents, and wallets should be able to distinguish it clearly from selector-scoped authorization.
+
+A call to `permitFullAuthorization` MUST follow the same deadline, expiry, nonce, and signature validation rules as `permitPermission`. On success it MUST increment `permissionNonce[permit.user]` by 1 and either:
+
+- if `permit.expiry == 0`, revoke the entire authorization blob for `(permit.user, permit.operator, permit.target)`; or
+- otherwise, set an expiry-only full-target authorization blob for `(permit.user, permit.operator, permit.target)`.
+
+The EIP-712 typed data structure is:
+
+```
+FullAuthorizationPermit(
+    address user,
+    address operator,
+    address target,
+    uint48 expiry,
+    uint256 nonce,
+    uint256 deadline
+)
+```
+
+Wallets and signing applications MUST present this as full-target authorization, not as a selector-scoped permit. In human terms, the signed message says: “allow this operator to call any function on this target until expiry,” or revoke that broad authorization when `expiry == 0`.
+
 **`permissionNonce(address user) → uint256`**
 
-MUST return the current nonce for `user`. This value is incremented after each successful `permitPermission` call for that user.
+MUST return the current nonce for `user`. This value is incremented after each successful `permitPermission` or `permitFullAuthorization` call for that user.
 
 ### Recommended Integration Pattern
 
@@ -389,8 +431,9 @@ The reference test suite at [`test/PermissionRegistry.t.sol`](./test/PermissionR
 - Permission key isolation: grants are scoped to `(user, operator, target)` plus selector payload; a stranger's `revoke` call cannot affect a user's permission
 - Operator isolation: an operator cannot revoke the permission granted to them by a user
 - Multiple users granting to the same operator are independent
-- `permitPermission`: correct grant and revoke, wrong signer, expired deadline, skipped nonce, replay rejection
+- `permitPermission`: correct selector grant and revoke, wrong signer, expired deadline, skipped nonce, replay rejection
 - `permitPermission` with time-bounded expiry
+- `permitFullAuthorization`: full-target grant and revoke, shared nonce behavior
 - Permit-granted permissions are revocable via direct `revoke`
 - High-s signature rejection
 - Struct field mutation after signing invalidates the signature

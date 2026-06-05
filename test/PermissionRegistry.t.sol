@@ -93,7 +93,7 @@ contract PermissionRegistryTest is Test {
         vm.prank(operator);
         lpWrapper.addLiquidity(managedId, 250);
 
-        (, , , uint128 liquidity, , ) = lpManager.positions(1);
+        (,,, uint128 liquidity,,) = lpManager.positions(1);
         assertEq(uint256(liquidity), 1_250);
 
         lpManager.seedFees(1, 9 ether, 4 ether);
@@ -290,6 +290,83 @@ contract PermissionRegistryTest is Test {
         vm.prank(operator);
         (uint256 a0,) = lpWrapper.claim(managedId, recipient);
         assertEq(a0, 5 ether);
+    }
+
+    function testPermitFullAuthorizationGrantsEntireTargetOnBehalfOfUser() public {
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
+
+        uint256 deadline = block.timestamp + 1 hours;
+        IPermissionRegistry.FullAuthorizationPermit memory permit = IPermissionRegistry.FullAuthorizationPermit({
+            user: userAddr,
+            operator: operator,
+            target: address(lpWrapper),
+            expiry: type(uint48).max,
+            nonce: 0,
+            deadline: deadline
+        });
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                registry.FULL_AUTHORIZATION_PERMIT_TYPEHASH(),
+                permit.user,
+                permit.operator,
+                permit.target,
+                permit.expiry,
+                permit.nonce,
+                permit.deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
+
+        registry.permitFullAuthorization(permit, abi.encodePacked(r, s, v));
+
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertTrue(
+            registry.isAuthorizedCall(
+                userAddr, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector
+            )
+        );
+        assertEq(registry.permissionNonce(userAddr), 1);
+        assertEq(registry.rawPermissionData(userAddr, operator, address(lpWrapper)).length, 4);
+    }
+
+    function testPermitFullAuthorizationCanRevokeEntireTarget() public {
+        uint256 userKey = 0xA11CE;
+        address userAddr = vm.addr(userKey);
+
+        vm.prank(userAddr);
+        registry.grantFull(operator, address(lpWrapper));
+        assertTrue(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+
+        IPermissionRegistry.FullAuthorizationPermit memory permit = IPermissionRegistry.FullAuthorizationPermit({
+            user: userAddr,
+            operator: operator,
+            target: address(lpWrapper),
+            expiry: 0,
+            nonce: 0,
+            deadline: block.timestamp + 1 hours
+        });
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                registry.FULL_AUTHORIZATION_PERMIT_TYPEHASH(),
+                permit.user,
+                permit.operator,
+                permit.target,
+                permit.expiry,
+                permit.nonce,
+                permit.deadline
+            )
+        );
+        bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userKey, digest);
+
+        registry.permitFullAuthorization(permit, abi.encodePacked(r, s, v));
+
+        assertFalse(registry.isAuthorizedCall(userAddr, operator, address(lpWrapper), lpWrapper.claim.selector));
+        assertEq(registry.rawPermissionData(userAddr, operator, address(lpWrapper)).length, 0);
     }
 
     function testPermitPermissionRevokeOnBehalfOfUser() public {
@@ -511,7 +588,10 @@ contract PermissionRegistryTest is Test {
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionExpired.selector,
-                user, operator, address(lpWrapper), lpWrapper.claim.selector
+                user,
+                operator,
+                address(lpWrapper),
+                lpWrapper.claim.selector
             )
         );
         lpWrapper.claim(managedId, recipient);
@@ -589,14 +669,18 @@ contract PermissionRegistryTest is Test {
 
         IPermissionRegistry.PermissionKey[] memory keys = new IPermissionRegistry.PermissionKey[](3);
         keys[0] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.claim.selector);
-        keys[1] = IPermissionRegistry.PermissionKey(userB, operator, address(lpWrapper), lpWrapper.addLiquidity.selector); // wrong user
+        keys[1] =
+            IPermissionRegistry.PermissionKey(userB, operator, address(lpWrapper), lpWrapper.addLiquidity.selector); // wrong user
         keys[2] = IPermissionRegistry.PermissionKey(user, operator, address(lpWrapper), lpWrapper.addLiquidity.selector);
 
         vm.prank(user);
         vm.expectRevert(
             abi.encodeWithSelector(
                 IPermissionRegistry.PermissionDenied.selector,
-                userB, user, address(lpWrapper), lpWrapper.addLiquidity.selector
+                userB,
+                user,
+                address(lpWrapper),
+                lpWrapper.addLiquidity.selector
             )
         );
         registry.grantBatch(keys);
@@ -785,8 +869,13 @@ contract PermissionRegistryTest is Test {
         bytes32 structHash = keccak256(
             abi.encode(
                 registry.PERMISSION_PERMIT_TYPEHASH(),
-                permit.user, permit.operator, permit.target,
-                permit.selector, permit.expiry, permit.nonce, permit.deadline
+                permit.user,
+                permit.operator,
+                permit.target,
+                permit.selector,
+                permit.expiry,
+                permit.nonce,
+                permit.deadline
             )
         );
         bytes32 digest = keccak256(abi.encodePacked("\x19\x01", registry.domainSeparator(), structHash));
@@ -860,7 +949,9 @@ contract PermissionRegistryTest is Test {
         registry.grantFull(operator, address(lpWrapper));
 
         assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+        assertTrue(
+            registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector)
+        );
         assertEq(registry.rawPermissionData(user, operator, address(lpWrapper)).length, 4);
 
         lpManager.seedFees(1, 3 ether, 5 ether);
@@ -901,7 +992,9 @@ contract PermissionRegistryTest is Test {
         registry.grantFullWithExpiry(operator, address(lpWrapper), type(uint48).max);
 
         assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+        assertEq(
+            registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max
+        );
     }
 
     function testGrantWithExpiryAcceptsPermanentSentinel() public {
@@ -909,7 +1002,9 @@ contract PermissionRegistryTest is Test {
         registry.grantWithExpiry(operator, address(lpWrapper), lpWrapper.claim.selector, type(uint48).max);
 
         assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertEq(registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max);
+        assertEq(
+            registry.permissionExpiry(user, operator, address(lpWrapper), lpWrapper.claim.selector), type(uint48).max
+        );
     }
 
     function testSelectorGrantDoesNotMutateExistingFullApproval() public {
@@ -965,7 +1060,9 @@ contract PermissionRegistryTest is Test {
         registry.grantSelectorBundle(operator, address(lpWrapper), sorted, type(uint48).max);
 
         assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.claim.selector));
-        assertTrue(registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector));
+        assertTrue(
+            registry.isAuthorizedCall(user, operator, address(lpWrapper), lpWrapper.transferManagedPosition.selector)
+        );
     }
 
     // -------------------------------------------------------------------------

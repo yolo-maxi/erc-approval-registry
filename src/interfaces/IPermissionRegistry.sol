@@ -32,6 +32,19 @@ interface IPermissionRegistry {
         uint256 deadline;
     }
 
+    /// @notice Signed permit for gasless full-target grants/revokes.
+    /// @dev expiry semantics: 0 = revoke all, type(uint48).max = permanent, else = expiry timestamp.
+    ///      Full-target authorization is intentionally a separate typed-data shape so wallets can
+    ///      render stronger warnings than they would for selector-scoped permissions.
+    struct FullAuthorizationPermit {
+        address user;
+        address operator;
+        address target;
+        uint48 expiry;
+        uint256 nonce;
+        uint256 deadline;
+    }
+
     // -------------------------------------------------------------------------
     // Errors
     // -------------------------------------------------------------------------
@@ -60,6 +73,14 @@ interface IPermissionRegistry {
         bytes4 selector,
         bool approved,
         uint48 expiry
+    );
+
+    /// @notice Emitted when the whole authorization blob for (user, operator, target) is replaced.
+    /// @dev Empty selectors with nonzero expiry means full-target authorization. Empty selectors with
+    ///      zero expiry means no authorization. This decoded event is indexer/wallet friendly; the
+    ///      packed storage bytes remain an implementation detail.
+    event AuthorizationSet(
+        address indexed user, address indexed operator, address indexed target, uint48 expiry, bytes4[] selectors
     );
 
     // -------------------------------------------------------------------------
@@ -100,6 +121,9 @@ interface IPermissionRegistry {
 
     /// @notice Gasless selector permission grant/revoke: user signs off-chain, anyone submits on-chain.
     function permitPermission(PermissionPermit calldata permit, bytes calldata signature) external;
+
+    /// @notice Gasless full-target authorization grant/revoke: user signs off-chain, anyone submits on-chain.
+    function permitFullAuthorization(FullAuthorizationPermit calldata permit, bytes calldata signature) external;
 
     // -------------------------------------------------------------------------
     // Authorization queries

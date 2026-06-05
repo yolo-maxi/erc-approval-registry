@@ -94,14 +94,23 @@ The reference implementation stores expiry compactly as `uint32` (permanent sent
 
 ## EIP-712 permit
 
-A selector-scoped EIP-712 permit lets a user grant or revoke a single selector without sending a transaction themselves. Permits are intentionally selector-scoped; full-target approvals should require an explicit on-chain call so wallets can warn appropriately.
+EIP-712 permits now have two explicit paths:
+
+- selector-scoped permits for narrow grants/revokes
+- full-target authorization permits for trusted forwarders/agents
+
+The full-target permit is intentionally first-class rather than encoded as a selector edge case, so wallets can render stronger warnings for broad authorization.
+
+## Event design
+
+Selector changes emit `PermissionSet`. Whole-blob replacements also emit `AuthorizationSet(user, operator, target, expiry, selectors)` so indexers and wallets can reconstruct decoded authorization state without each implementation decoding packed bytes differently. Empty `selectors` with nonzero `expiry` means full-target authorization. Empty `selectors` with zero expiry means revoked/no authorization.
 
 ## Questions for feedback
 
 1. Is full-target approval acceptable as a first-class primitive if wallets clearly distinguish it from selector-scoped approvals?
 2. Should the standard recommend a maximum selector-bundle size?
 3. Is `uint32` expiry inside the packed bytes acceptable given the permanent sentinel and the 2106 finite horizon?
-4. Is the current event model enough for indexers, or should it carry more state?
-5. Should `permitPermission` stay selector-scoped only, or also support full-target?
+4. Is the decoded `AuthorizationSet` event enough for indexers and wallet state reconstruction?
+5. Should the full-target EIP-712 permit be named `permitFullAuthorization`, or is there a clearer naming convention?
 
 Thanks — looking for design feedback before turning this into a formal EIP PR.

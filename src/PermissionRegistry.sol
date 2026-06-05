@@ -21,6 +21,10 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         "PermissionPermit(address user,address operator,address target,bytes4 selector,uint48 expiry,uint256 nonce,uint256 deadline)"
     );
 
+    bytes32 public constant FULL_AUTHORIZATION_PERMIT_TYPEHASH = keccak256(
+        "FullAuthorizationPermit(address user,address operator,address target,uint48 expiry,uint256 nonce,uint256 deadline)"
+    );
+
     mapping(address user => mapping(address operator => mapping(address target => bytes))) internal permissions;
 
     mapping(address user => uint256) public permissionNonce;
@@ -55,13 +59,13 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
 
     /// @notice Revoke all approvals for operator on target.
     function revokeAll(address operator, address target) external {
-        _validateBase(msg.sender, operator, target);
-        delete permissions[msg.sender][operator][target];
-        emit PermissionSet(msg.sender, operator, target, bytes4(0), false, 0);
+        _revokeAll(msg.sender, operator, target);
     }
 
     /// @notice Set exactly the provided selector bundle for operator on target.
-    function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry) external {
+    function grantSelectorBundle(address operator, address target, bytes4[] calldata selectors, uint48 expiry)
+        external
+    {
         uint32 storedExpiry = expiry == PERMANENT ? STORED_PERMANENT : _normalizeExpiry(expiry);
         _setSelectorBundle(msg.sender, operator, target, selectors, storedExpiry);
     }
@@ -81,7 +85,9 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             PermissionEntry calldata entry = entries[i];
             PermissionKey calldata key = entry.key;
             if (key.user != msg.sender) revert PermissionDenied(key.user, msg.sender, key.target, key.selector);
-            _grantSelector(key.user, key.operator, key.target, key.selector, _normalizeExpiryAllowPermanent(entry.expiry));
+            _grantSelector(
+                key.user, key.operator, key.target, key.selector, _normalizeExpiryAllowPermanent(entry.expiry)
+            );
         }
     }
 
@@ -124,7 +130,42 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         if (permit.expiry == 0) {
             _revokeSelector(permit.user, permit.operator, permit.target, permit.selector);
         } else {
-            _grantSelector(permit.user, permit.operator, permit.target, permit.selector, _normalizeExpiryAllowPermanent(permit.expiry));
+            _grantSelector(
+                permit.user,
+                permit.operator,
+                permit.target,
+                permit.selector,
+                _normalizeExpiryAllowPermanent(permit.expiry)
+            );
+        }
+    }
+
+    function permitFullAuthorization(FullAuthorizationPermit calldata permit, bytes calldata signature) external {
+        if (block.timestamp > permit.deadline) revert DeadlineExpired();
+        if (permit.expiry != 0) _normalizeExpiryAllowPermanent(permit.expiry);
+
+        uint256 nonce = permissionNonce[permit.user];
+        if (permit.nonce != nonce) revert InvalidNonce(nonce, permit.nonce);
+
+        bytes32 structHash = keccak256(
+            abi.encode(
+                FULL_AUTHORIZATION_PERMIT_TYPEHASH,
+                permit.user,
+                permit.operator,
+                permit.target,
+                permit.expiry,
+                permit.nonce,
+                permit.deadline
+            )
+        );
+        address signer = ECDSA.recover(_hashTypedData(structHash), bytes(signature));
+        if (signer != permit.user) revert InvalidSignature();
+
+        permissionNonce[permit.user] = nonce + 1;
+        if (permit.expiry == 0) {
+            _revokeAll(permit.user, permit.operator, permit.target);
+        } else {
+            _setFull(permit.user, permit.operator, permit.target, _normalizeExpiryAllowPermanent(permit.expiry));
         }
     }
 
@@ -153,7 +194,8 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
         view
         returns (uint48)
     {
-        (bool selectorPresent, uint32 expiry,) = _decodeStorageAuthorization(permissions[user][operator][target], selector);
+        (bool selectorPresent, uint32 expiry,) =
+            _decodeStorageAuthorization(permissions[user][operator][target], selector);
         if (!selectorPresent) return 0;
         return _externalExpiry(expiry);
     }
@@ -169,7 +211,17 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
     function _setFull(address user, address operator, address target, uint32 expiry) internal {
         _validateBase(user, operator, target);
         permissions[user][operator][target] = abi.encodePacked(expiry);
+        bytes4[] memory selectors = new bytes4[](0);
         emit PermissionSet(user, operator, target, bytes4(0), true, _externalExpiry(expiry));
+        emit AuthorizationSet(user, operator, target, _externalExpiry(expiry), selectors);
+    }
+
+    function _revokeAll(address user, address operator, address target) internal {
+        _validateBase(user, operator, target);
+        delete permissions[user][operator][target];
+        bytes4[] memory selectors = new bytes4[](0);
+        emit PermissionSet(user, operator, target, bytes4(0), false, 0);
+        emit AuthorizationSet(user, operator, target, 0, selectors);
     }
 
     function _setSelectorBundle(
@@ -197,6 +249,7 @@ contract PermissionRegistry is IPermissionRegistry, EIP712 {
             emit PermissionSet(user, operator, target, selector, true, _externalExpiry(expiry));
         }
         permissions[user][operator][target] = auth;
+        emit AuthorizationSet(user, operator, target, _externalExpiry(expiry), selectors);
     }
 
     function _grantSelector(address user, address operator, address target, bytes4 selector, uint32 expiry) internal {
