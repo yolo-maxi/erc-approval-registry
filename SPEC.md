@@ -220,6 +220,10 @@ MUST revert with `PermissionDenied` if the authorization blob does not authorize
 
 MUST return the externally-visible expiry for `selector` under `(user, operator, target)`. If the authorization blob is full-target approval and not empty, this MUST return the full-target expiry for any selector. If `selector` is not authorized, this MUST return `0`. A return value of `type(uint48).max` means permanent.
 
+#### Timestamp anchoring
+
+`isAuthorizedCall` and `requireAuthorizedCall` evaluate authorization against the current `block.timestamp` — they answer "is this authorized *now*". There is intentionally no onchain query for "was this authorized at past timestamp T"; that history lives in the event log (see [Historical state](#historical-state)). For settlement or commit-then-execute flows that must reason about a *window* rather than an instant, `permissionExpiry` is the first-class timestamp primitive: a contract can read the expiry and assert the permission remains valid through its settlement deadline, rather than only at the moment of the check. Which timestamp anchors a multi-step flow — the commit time or the settlement time — is an integrating-protocol decision; the core registry attests authorization only at call time.
+
 **`rawPermissionData(address user, address operator, address target) → bytes`**
 
 MUST return the raw authorization blob for `(user, operator, target)`. This function exists for indexers, wallets, and offchain tooling that want to inspect whether an approval is full-target or selector-bundled without testing individual selectors.
@@ -229,6 +233,10 @@ MUST return the raw authorization blob for `(user, operator, target)`. This func
 A `PermissionSet` event MUST be emitted on every selector-level change made by `grant`, `grantWithExpiry`, `revoke`, `grantBatch`, `grantBatchWithExpiry`, `revokeBatch`, and `permitPermission`. The `approved` field MUST be `true` if the resulting expiry is nonzero, and `false` if it is `0`. The `expiry` field MUST reflect the externally-visible expiry. For full-target approvals and full revocations, implementations MUST emit `PermissionSet` with `selector == bytes4(0)`.
 
 Implementations SHOULD also emit `AuthorizationSet` when the full authorization blob for `(user, operator, target)` is replaced, including `grantFull`, `grantFullWithExpiry`, `revokeAll`, `grantSelectorBundle`, and `permitFullAuthorization`. `AuthorizationSet` carries decoded state for indexers and wallets: `expiry` plus the active `selectors` array. An empty `selectors` array with nonzero `expiry` means full-target authorization; an empty array with `expiry == 0` means no authorization. Indexers SHOULD prefer `AuthorizationSet` for full-state reconstruction instead of decoding packed bytes differently in every implementation.
+
+#### Historical state
+
+Storage holds only the *current* authorization for each `(user, operator, target)` key; every grant or revoke overwrites the previous blob in place. The `PermissionSet` and `AuthorizationSet` event stream is therefore the canonical historical record of authorization state. Reconstructing the authorization in force at a past block is an event-log replay performed offchain by indexers — it is deliberately not an onchain query, because no prior state is retained onchain. Tooling that needs point-in-time authorization history MUST derive it from these events rather than from storage.
 
 ### Gasless Permit
 
@@ -363,6 +371,8 @@ modifier onlyAuthorized(address user) {
 ```
 
 The user always retains direct access (`msg.sender == user` bypasses the registry check). Any other caller must hold a valid permission for the calling function's selector on this contract. The `msg.sig` value is the four-byte selector of the currently-executing function, so no additional bookkeeping is required to scope the check to the correct function.
+
+Reading `msg.sig` is a convenience of *this* modifier, not a property of the registry. The core authorization queries — `isAuthorizedCall(user, operator, target, bytes4 selector)` and `requireAuthorizedCall(...)` — take the selector as an explicit argument and are never coupled to the calling function's signature. Contracts and other ERCs composing on top MAY pass any selector they choose: the executing selector, a fixed capability selector, or one derived from calldata. The `msg.sig` pattern simply serves the common case where the delegated capability maps 1:1 onto the function being called.
 
 Each function on the target contract that should be independently delegatable MUST apply this modifier separately. Functions applied with the same modifier call are independently grantable — granting permission for one does not affect authorization for any other.
 
